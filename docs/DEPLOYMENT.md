@@ -32,6 +32,14 @@ git push -u origin main
 
 You can also do this through GitHub Desktop if that is more comfortable.
 
+If `git push` says it cannot read a username, the machine is not authenticated with GitHub command-line git. The simplest fixes are:
+
+- Install GitHub Desktop, sign in, add this local repository, and push.
+- Install GitHub CLI, run `gh auth login`, then run `gh auth setup-git` and retry `git push -u origin main`.
+- Configure an SSH key for GitHub, switch the remote to `git@github.com:YOUR_USERNAME/variant-research-workbench.git`, and retry the push.
+
+Do not paste GitHub personal access tokens into the app or into AI chat.
+
 3. Sign in to Render and choose **New > Blueprint** or **New > Web Service**.
 4. Connect the GitHub repository.
 5. If you use the Blueprint path, Render reads `render.yaml`.
