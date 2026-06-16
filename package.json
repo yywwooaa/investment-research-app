@@ -1,0 +1,20 @@
+{
+  "name": "variant-research-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": ".venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000",
+    "dev:web": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "start": "python -m uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}",
+    "bloomberg:check": ".venv/bin/python scripts/check_bloomberg.py",
+    "yahoo:check": ".venv/bin/python scripts/check_yahoo.py",
+    "weekly:update": ".venv/bin/python scripts/weekly_update.py",
+    "test": "python -m pytest backend/tests",
+    "lint": "npm --prefix frontend run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

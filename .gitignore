@@ -1,0 +1,23 @@
+node_modules/
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+coverage/
+*.pyc
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Bloomberg/local-only data. Keep proprietary data and credentials out of git.
+data/local/
+data/cache/
+*.sqlite
+*.sqlite3
+*.db
+*.parquet
+*.pkl

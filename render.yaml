@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: variant-research-workbench
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: VRW_DATA_SOURCE
+        value: yahoo
+      - key: VRW_LOCAL_DATA_DIR
+        value: /tmp/variant-research-workbench
+      - key: VRW_SQLITE_PATH
+        value: /tmp/variant-research-workbench/workbench.sqlite3
+
