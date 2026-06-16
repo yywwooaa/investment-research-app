@@ -2,15 +2,20 @@ import { useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
   BarChart3,
+  BookmarkCheck,
+  BookmarkPlus,
   Clipboard,
   DatabaseZap,
   FileText,
+  Flame,
+  Gauge,
   LineChart as LineChartIcon,
   Newspaper,
   RefreshCw,
   Save,
   Search,
   Sparkles,
+  Target,
   TrendingUp
 } from "lucide-react";
 import {
@@ -28,6 +33,7 @@ import { api } from "./api";
 import type {
   CompanyRecord,
   MarkdownExport,
+  SavedIdea,
   ScenarioAssumption,
   ScenarioKey,
   ScenarioValuation,
@@ -77,6 +83,34 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function signalClass(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "";
+  if (value > 0) return "positive";
+  if (value < 0) return "negative";
+  return "";
+}
+
+function ideaForTicker(ticker: string, note = ""): SavedIdea {
+  const date = today();
+  return {
+    ticker,
+    note,
+    priority: "Medium",
+    created_at: date,
+    updated_date: date
+  };
+}
+
+function newsRank(item: CompanyRecord["news"][number]) {
+  const sentimentWeight = item.sentiment === "Negative" ? 3 : item.sentiment === "Positive" ? 2 : 1;
+  const keywordWeight = /earnings|revenue|margin|guidance|forecast|ai|chip|cloud|deal|contract|export|lawsuit|upgrade|downgrade/i.test(
+    `${item.title} ${item.summary} ${item.impact_reason}`
+  )
+    ? 2
+    : 0;
+  return sentimentWeight + keywordWeight;
+}
+
 export default function App() {
   const [universe, setUniverse] = useState<UniverseRow[]>([]);
   const [selectedTicker, setSelectedTicker] = useState("NVDA");
@@ -84,6 +118,9 @@ export default function App() {
   const [thesisDraft, setThesisDraft] = useState<Thesis | null>(null);
   const [valuationDraft, setValuationDraft] = useState<ScenarioValuation | null>(null);
   const [exportDraft, setExportDraft] = useState<MarkdownExport | null>(null);
+  const [savedIdeas, setSavedIdeas] = useState<SavedIdea[]>([]);
+  const [ideaNote, setIdeaNote] = useState("");
+  const [ideaPriority, setIdeaPriority] = useState<SavedIdea["priority"]>("Medium");
   const [activeTab, setActiveTab] = useState<Tab>("Tear Sheet");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Loading research workspace...");
@@ -105,6 +142,11 @@ export default function App() {
     }
   }
 
+  async function loadSavedIdeas() {
+    const ideas = await api.saved();
+    setSavedIdeas(ideas);
+  }
+
   async function loadCompany(ticker: string) {
     setIsBusy(true);
     try {
@@ -118,9 +160,9 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadUniverse()
+    Promise.all([loadUniverse(), loadSavedIdeas()])
       .then(() => setStatus("Snapshot universe ready"))
-      .catch((error) => setStatus(error instanceof Error ? error.message : "Unable to load universe"));
+      .catch((error) => setStatus(error instanceof Error ? error.message : "Unable to load workspace"));
   }, []);
 
   useEffect(() => {
@@ -128,6 +170,13 @@ export default function App() {
       void loadCompany(selectedTicker);
     }
   }, [selectedTicker, universe]);
+
+  useEffect(() => {
+    if (!company) return;
+    const saved = savedIdeas.find((idea) => idea.ticker === company.profile.ticker);
+    setIdeaNote(saved?.note ?? "");
+    setIdeaPriority(saved?.priority ?? "Medium");
+  }, [company, savedIdeas]);
 
   const filteredUniverse = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -139,6 +188,30 @@ export default function App() {
         row.industry.toLowerCase().includes(search)
     );
   }, [query, universe]);
+
+  const selectedSavedIdea = useMemo(
+    () => (company ? savedIdeas.find((idea) => idea.ticker === company.profile.ticker) ?? null : null),
+    [company, savedIdeas]
+  );
+
+  const marketDesk = useMemo(() => {
+    const rows = [...universe];
+    const averageDaily = rows.length ? rows.reduce((sum, row) => sum + row.daily_change_pct, 0) / rows.length : 0;
+    const averageYtd = rows.length ? rows.reduce((sum, row) => sum + row.ytd_change_pct, 0) / rows.length : 0;
+    const positiveCount = rows.filter((row) => row.daily_change_pct >= 0).length;
+    const buys = rows.filter((row) => row.recommendation === "Buy").length;
+    const holds = rows.filter((row) => row.recommendation === "Hold").length;
+    const sells = rows.filter((row) => row.recommendation === "Sell").length;
+    return {
+      averageDaily,
+      averageYtd,
+      breadth: rows.length ? (positiveCount / rows.length) * 100 : 0,
+      topGainers: [...rows].sort((a, b) => b.daily_change_pct - a.daily_change_pct).slice(0, 3),
+      topLosers: [...rows].sort((a, b) => a.daily_change_pct - b.daily_change_pct).slice(0, 3),
+      recommendationMix: { buys, holds, sells },
+      heatmap: [...rows].sort((a, b) => b.relative_strength_pct - a.relative_strength_pct)
+    };
+  }, [universe]);
 
   const selectedScenario = valuationDraft ? valuationDraft[valuationDraft.selected_case] : null;
 
@@ -220,6 +293,58 @@ export default function App() {
     }
   }
 
+  async function saveCurrentIdea() {
+    if (!company) return;
+    setIsBusy(true);
+    try {
+      const saved = await api.saveIdea(company.profile.ticker, {
+        ...(selectedSavedIdea ?? ideaForTicker(company.profile.ticker)),
+        note: ideaNote.trim(),
+        priority: ideaPriority,
+        updated_date: today()
+      });
+      setSavedIdeas((current) => [saved, ...current.filter((idea) => idea.ticker !== saved.ticker)]);
+      setStatus(`${saved.ticker} saved to idea board`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to save idea");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function removeCurrentIdea(ticker = company?.profile.ticker) {
+    if (!ticker) return;
+    setIsBusy(true);
+    try {
+      await api.deleteIdea(ticker);
+      setSavedIdeas((current) => current.filter((idea) => idea.ticker !== ticker));
+      setStatus(`${ticker} removed from saved ideas`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to remove saved idea");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function openTicker(ticker: string) {
+    const normalized = ticker.trim().toUpperCase();
+    if (!normalized) return;
+    if (universe.some((row) => row.ticker === normalized)) {
+      setSelectedTicker(normalized);
+      return;
+    }
+    setIsBusy(true);
+    try {
+      const record = await api.research(normalized);
+      hydrateCompany(record, `${record.profile.ticker} research view ready`);
+      setActiveTab("Tear Sheet");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to open ticker");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
   function updateScenario(caseName: ScenarioKey, field: keyof ScenarioAssumption, value: number) {
     setValuationDraft((current) => {
       if (!current) return current;
@@ -264,12 +389,19 @@ export default function App() {
           </button>
         </form>
 
+        <SavedIdeasPanel
+          ideas={savedIdeas}
+          activeTicker={company?.profile.ticker ?? selectedTicker}
+          onOpen={(ticker) => void openTicker(ticker)}
+          onRemove={(ticker) => void removeCurrentIdea(ticker)}
+        />
+
         <div className="universe-list" aria-label="Coverage universe">
           {filteredUniverse.map((row) => (
             <button
               key={row.ticker}
               className={`universe-row ${row.ticker === selectedTicker ? "selected" : ""}`}
-              onClick={() => setSelectedTicker(row.ticker)}
+              onClick={() => void openTicker(row.ticker)}
             >
               <span>
                 <strong>{row.ticker}</strong>
@@ -291,6 +423,34 @@ export default function App() {
       <main className="workbench">
         {company && thesisDraft && valuationDraft ? (
           <>
+            <section className="research-command">
+              <div>
+                <span className="eyebrow">Equity research workflow</span>
+                <h2>Type a ticker, pressure-test the thesis, save the idea.</h2>
+              </div>
+              <form
+                className="command-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void analyzeTicker();
+                }}
+              >
+                <Search size={18} aria-hidden="true" />
+                <input
+                  aria-label="Analyze ticker"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="NVDA, AAPL, JPM..."
+                />
+                <button type="submit" disabled={isBusy}>
+                  <Sparkles size={16} aria-hidden="true" />
+                  Analyze
+                </button>
+              </form>
+            </section>
+
+            <MarketDeskOverview desk={marketDesk} onOpen={(ticker) => void openTicker(ticker)} />
+
             <header className="company-header">
               <div>
                 <span className="eyebrow">{company.profile.sector} / {company.profile.industry}</span>
@@ -310,12 +470,48 @@ export default function App() {
                   <strong>{company.recommendation.rating}</strong>
                   <span>{company.recommendation.confidence} confidence</span>
                 </div>
+                <button
+                  className={`bookmark-button ${selectedSavedIdea ? "saved" : ""}`}
+                  type="button"
+                  onClick={() => void saveCurrentIdea()}
+                  disabled={isBusy}
+                  title={selectedSavedIdea ? "Update saved idea" : "Save idea"}
+                >
+                  {selectedSavedIdea ? <BookmarkCheck size={17} aria-hidden="true" /> : <BookmarkPlus size={17} aria-hidden="true" />}
+                  {selectedSavedIdea ? "Saved" : "Save"}
+                </button>
                 <button className="primary-button" type="button" onClick={exportSubstack} disabled={isBusy}>
                   <FileText size={17} aria-hidden="true" />
                   Export
                 </button>
               </div>
             </header>
+
+            <section className="idea-note-panel">
+              <div>
+                <span className="eyebrow">Saved idea note</span>
+                <p>{selectedSavedIdea ? "Capture why this name deserves follow-up." : "Bookmark this ticker and write the variant angle you want to revisit."}</p>
+              </div>
+              <select
+                aria-label="Idea priority"
+                value={ideaPriority}
+                onChange={(event) => setIdeaPriority(event.target.value as SavedIdea["priority"])}
+              >
+                <option>High</option>
+                <option>Medium</option>
+                <option>Low</option>
+              </select>
+              <textarea
+                rows={2}
+                value={ideaNote}
+                onChange={(event) => setIdeaNote(event.target.value)}
+                placeholder="Why this could work, what you need to verify, or what would change your mind..."
+              />
+              <button className="secondary-button" type="button" onClick={() => void saveCurrentIdea()} disabled={isBusy}>
+                <Save size={16} aria-hidden="true" />
+                Save note
+              </button>
+            </section>
 
             <section className="metric-grid" aria-label="Market snapshot">
               <Metric label="Market Cap" value={`${formatNumber(company.profile.market_cap, 0)}B`} />
@@ -373,15 +569,152 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: "
   );
 }
 
+function SavedIdeasPanel({
+  ideas,
+  activeTicker,
+  onOpen,
+  onRemove
+}: {
+  ideas: SavedIdea[];
+  activeTicker: string;
+  onOpen: (ticker: string) => void;
+  onRemove: (ticker: string) => void;
+}) {
+  return (
+    <section className="saved-rail" aria-label="Saved ideas">
+      <div className="rail-section-heading">
+        <span>Saved ideas</span>
+        <strong>{ideas.length}</strong>
+      </div>
+      {ideas.length ? (
+        <div className="saved-list">
+          {ideas.map((idea) => (
+            <article key={idea.ticker} className={`saved-card ${idea.ticker === activeTicker ? "active" : ""}`}>
+              <button type="button" onClick={() => onOpen(idea.ticker)}>
+                <span>
+                  <strong>{idea.ticker}</strong>
+                  <small>{idea.priority} priority</small>
+                </span>
+                <BookmarkCheck size={15} aria-hidden="true" />
+              </button>
+              {idea.note && <p>{idea.note}</p>}
+              <button className="text-button" type="button" onClick={() => onRemove(idea.ticker)}>
+                Remove
+              </button>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="empty-rail-note">Bookmark names you want to revisit and write the angle you are underwriting.</p>
+      )}
+    </section>
+  );
+}
+
+function MarketDeskOverview({
+  desk,
+  onOpen
+}: {
+  desk: {
+    averageDaily: number;
+    averageYtd: number;
+    breadth: number;
+    topGainers: UniverseRow[];
+    topLosers: UniverseRow[];
+    recommendationMix: { buys: number; holds: number; sells: number };
+    heatmap: UniverseRow[];
+  };
+  onOpen: (ticker: string) => void;
+}) {
+  return (
+    <section className="market-desk" aria-label="Market overview">
+      <div className="desk-metric">
+        <Gauge size={17} aria-hidden="true" />
+        <span>AI infra basket</span>
+        <strong className={signalClass(desk.averageDaily)}>{formatPct(desk.averageDaily)}</strong>
+      </div>
+      <div className="desk-metric">
+        <Target size={17} aria-hidden="true" />
+        <span>Positive breadth</span>
+        <strong>{formatPct(desk.breadth, 0)}</strong>
+      </div>
+      <div className="desk-metric">
+        <TrendingUp size={17} aria-hidden="true" />
+        <span>Avg YTD</span>
+        <strong className={signalClass(desk.averageYtd)}>{formatPct(desk.averageYtd)}</strong>
+      </div>
+      <div className="desk-metric">
+        <Flame size={17} aria-hidden="true" />
+        <span>Signal mix</span>
+        <strong>{desk.recommendationMix.buys}B / {desk.recommendationMix.holds}H / {desk.recommendationMix.sells}S</strong>
+      </div>
+
+      <div className="mover-panel">
+        <span>Top gainers</span>
+        {desk.topGainers.map((row) => (
+          <button key={row.ticker} type="button" onClick={() => onOpen(row.ticker)}>
+            <strong>{row.ticker}</strong>
+            <em className="positive">{formatPct(row.daily_change_pct)}</em>
+          </button>
+        ))}
+      </div>
+      <div className="mover-panel">
+        <span>Top losers</span>
+        {desk.topLosers.map((row) => (
+          <button key={row.ticker} type="button" onClick={() => onOpen(row.ticker)}>
+            <strong>{row.ticker}</strong>
+            <em className="negative">{formatPct(row.daily_change_pct)}</em>
+          </button>
+        ))}
+      </div>
+      <div className="heatmap-strip" aria-label="Watchlist heatmap">
+        {desk.heatmap.map((row) => (
+          <button
+            key={row.ticker}
+            type="button"
+            className={row.relative_strength_pct >= 0 ? "heat-positive" : "heat-negative"}
+            onClick={() => onOpen(row.ticker)}
+            title={`${row.ticker} relative strength ${formatPct(row.relative_strength_pct)}`}
+          >
+            {row.ticker}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function TearSheet({ company, selectedScenario }: { company: CompanyRecord; selectedScenario: ScenarioAssumption | null }) {
   const revenueData = company.financials.annual.map((point) => ({
     period: point.period,
     revenue: point.revenue,
     margin: point.ebitda_margin_pct ?? 0
   }));
+  const rankedNews = [...company.news].sort((a, b) => newsRank(b) - newsRank(a));
+  const weeklySignals = [
+    `${company.profile.ticker} moved ${formatPct(company.market.daily_change_pct)} today and ${formatPct(company.market.ytd_change_pct)} YTD.`,
+    `Relative strength is ${formatPct(company.market.relative_strength_pct)}, which ${company.market.relative_strength_pct >= 0 ? "supports" : "pressures"} the current signal.`,
+    `${rankedNews.length} ticker-specific news item(s) are available for the current research refresh.`,
+    `Base scenario shows ${selectedScenario ? formatPct(selectedScenario.implied_return_pct) : "n/a"} implied return.`
+  ];
 
   return (
     <section className="content-grid two-column">
+      <div className="panel weekly-panel">
+        <div className="panel-heading">
+          <h3>What Changed This Week</h3>
+          <span>{company.recommendation.updated_date}</span>
+        </div>
+        <div className="weekly-list">
+          {weeklySignals.map((signal) => (
+            <div key={signal} className="weekly-row">
+              <span />
+              <p>{signal}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="panel">
         <div className="panel-heading">
           <h3>Financial Trajectory</h3>
@@ -459,7 +792,7 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
           <Newspaper size={18} aria-hidden="true" />
         </div>
         <div className="news-list">
-          {company.news.map((item) => (
+          {rankedNews.map((item) => (
             <article key={`${item.title}-${item.published_at}`} className="news-row">
               <div>
                 <strong>{item.title}</strong>
@@ -467,6 +800,7 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
               </div>
               <span className={`sentiment ${item.sentiment.toLowerCase()}`}>{item.sentiment}</span>
               <p>{item.summary}</p>
+              <small>Why it matters: {item.impact_reason}</small>
             </article>
           ))}
         </div>

@@ -54,6 +54,7 @@ export interface NewsItem {
   sentiment: Sentiment;
   summary: string;
   url: string | null;
+  impact_reason: string;
 }
 
 export interface Recommendation {
@@ -145,6 +146,14 @@ export interface UniverseRow {
   catalyst_count: number;
   news_count: number;
   thesis_updated: string;
+}
+
+export interface SavedIdea {
+  ticker: string;
+  note: string;
+  priority: "High" | "Medium" | "Low";
+  created_at: string;
+  updated_date: string;
 }
 
 export interface RefreshResult {

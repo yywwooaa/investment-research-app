@@ -10,6 +10,7 @@ from backend.app.models import (
     CompanyRecord,
     MarkdownExport,
     RefreshResult,
+    SavedIdea,
     ScenarioValuation,
     Thesis,
     UniverseRow,
@@ -141,6 +142,24 @@ def put_valuation(ticker: str, valuation: ScenarioValuation) -> ScenarioValuatio
         raise HTTPException(status_code=400, detail="Ticker in path and body must match.")
     get_company(ticker)
     return repository.save_valuation(valuation)
+
+
+@app.get("/api/saved", response_model=list[SavedIdea])
+def list_saved_ideas() -> list[SavedIdea]:
+    return repository.list_saved_ideas()
+
+
+@app.put("/api/saved/{ticker}", response_model=SavedIdea)
+def put_saved_idea(ticker: str, idea: SavedIdea) -> SavedIdea:
+    if idea.ticker.upper() != ticker.upper():
+        raise HTTPException(status_code=400, detail="Ticker in path and body must match.")
+    return repository.save_saved_idea(idea)
+
+
+@app.delete("/api/saved/{ticker}")
+def delete_saved_idea(ticker: str) -> dict[str, bool]:
+    repository.delete_saved_idea(ticker)
+    return {"deleted": True}
 
 
 @app.post("/api/export/{ticker}/substack", response_model=MarkdownExport)

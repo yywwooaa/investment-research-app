@@ -4,7 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from backend.app.models import ScenarioValuation, Thesis
+from backend.app.models import SavedIdea, ScenarioValuation, Thesis
 
 
 class ResearchRepository:
@@ -36,6 +36,16 @@ class ResearchRepository:
                 CREATE TABLE IF NOT EXISTS valuations (
                     ticker TEXT PRIMARY KEY,
                     payload TEXT NOT NULL,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS saved_ideas (
+                    ticker TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -85,11 +95,51 @@ class ResearchRepository:
             )
         return valuation
 
+    def list_saved_ideas(self) -> list[SavedIdea]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM saved_ideas ORDER BY updated_at DESC, ticker ASC").fetchall()
+        return [SavedIdea.model_validate_json(row["payload"]) for row in rows]
+
+    def get_saved_idea(self, ticker: str) -> SavedIdea | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT payload FROM saved_ideas WHERE ticker = ?", (ticker.upper(),)).fetchone()
+        if row is None:
+            return None
+        return SavedIdea.model_validate_json(row["payload"])
+
+    def save_saved_idea(self, idea: SavedIdea) -> SavedIdea:
+        existing = self.get_saved_idea(idea.ticker)
+        normalized = idea.model_copy(
+            update={
+                "ticker": idea.ticker.upper(),
+                "created_at": existing.created_at if existing else idea.created_at,
+            }
+        )
+        payload = normalized.model_dump_json()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO saved_ideas (ticker, payload, created_at, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    payload = excluded.payload,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (normalized.ticker, payload),
+            )
+        return normalized
+
+    def delete_saved_idea(self, ticker: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM saved_ideas WHERE ticker = ?", (ticker.upper(),))
+
     def export_payload(self) -> dict[str, object]:
         with self._connect() as conn:
             theses = conn.execute("SELECT ticker, payload FROM theses ORDER BY ticker").fetchall()
             valuations = conn.execute("SELECT ticker, payload FROM valuations ORDER BY ticker").fetchall()
+            saved_ideas = conn.execute("SELECT ticker, payload FROM saved_ideas ORDER BY ticker").fetchall()
         return {
             "theses": {row["ticker"]: json.loads(row["payload"]) for row in theses},
             "valuations": {row["ticker"]: json.loads(row["payload"]) for row in valuations},
+            "saved_ideas": {row["ticker"]: json.loads(row["payload"]) for row in saved_ideas},
         }

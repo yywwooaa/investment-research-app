@@ -59,6 +59,7 @@ class NewsItem(BaseModel):
     sentiment: Sentiment = "Neutral"
     summary: str
     url: str | None = None
+    impact_reason: str = "Review for ticker-specific relevance before using in a thesis."
 
 
 class Recommendation(BaseModel):
@@ -152,6 +153,14 @@ class UniverseRow(BaseModel):
     catalyst_count: int
     news_count: int
     thesis_updated: date
+
+
+class SavedIdea(BaseModel):
+    ticker: str
+    note: str = ""
+    priority: Literal["High", "Medium", "Low"] = "Medium"
+    created_at: date = Field(default_factory=date.today)
+    updated_date: date = Field(default_factory=date.today)
 
 
 class RefreshResult(BaseModel):

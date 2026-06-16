@@ -93,6 +93,7 @@ def build_research_intake_record(ticker: str) -> CompanyRecord:
                     "The app needs Bloomberg News, a licensed news API, RSS pipeline, or manually "
                     "approved source import before it can summarize current developments."
                 ),
+                impact_reason="Ticker intake is incomplete until a current-news source is connected.",
             )
         ],
         recommendation=Recommendation(

@@ -8,8 +8,10 @@ The repository is designed to be public-GitHub safe. Demo fixtures are synthetic
 
 - Coverage dashboard for `NVDA`, `AMD`, `AVGO`, `TSM`, `ASML`, `MU`, `MSFT`, `AMZN`, `GOOGL`, `META`, `VRT`, and `ETN`.
 - Company tear sheets with market snapshot, financial trajectory, peer comps, variant view, catalysts, risks, and watch items.
+- Market-desk overview with coverage-basket breadth, top movers, recommendation mix, and a watchlist heatmap.
 - Bull/base/bear scenario valuation workspace with editable assumptions and implied return.
 - Thesis editor for stance, horizon, one-liner, variant view, evidence, risks, and watch items.
+- Saved idea board for bookmarking tickers, setting priority, and writing the reason you want to revisit the name.
 - Structured Substack Markdown export generated from your own thesis fields, not an LLM.
 - Bloomberg Desktop API adapter that can refresh configured reference fields locally when `blpapi` and Terminal API are available.
 - Buy/hold/sell recommendation cards with confidence, rationale, source status, positive drivers, negative drivers, and recent-news context.

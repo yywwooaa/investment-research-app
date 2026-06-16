@@ -15,6 +15,7 @@ from backend.app.models import (
     RefreshResult,
     ScenarioAssumption,
     ScenarioValuation,
+    Sentiment,
     Thesis,
 )
 from backend.app.providers.base import DataProvider
@@ -250,9 +251,10 @@ class YahooFinanceProvider(DataProvider):
                         title=title,
                         source=source,
                         published_at=published,
-                        sentiment="Neutral",
+                        sentiment=self._infer_news_sentiment(title, summary),
                         summary=summary,
                         url=content.get("clickThroughUrl", {}).get("url") if isinstance(content.get("clickThroughUrl"), dict) else item.get("link"),
+                        impact_reason=self._news_impact_reason(title, summary),
                     )
                 )
         if news_items:
@@ -264,6 +266,7 @@ class YahooFinanceProvider(DataProvider):
                 published_at=date.today(),
                 sentiment="Neutral",
                 summary="Market data loaded, but Yahoo Finance did not return clearly ticker-specific recent news for this request.",
+                impact_reason="Treat this as a data-coverage warning, not a company-specific signal.",
             )
         ]
 
@@ -288,6 +291,32 @@ class YahooFinanceProvider(DataProvider):
             except ValueError:
                 return date.today()
         return date.today()
+
+    @staticmethod
+    def _infer_news_sentiment(title: str, summary: str) -> Sentiment:
+        text = f"{title} {summary}".lower()
+        positive_terms = {"beat", "beats", "raises", "raised", "upgrade", "upgraded", "surge", "growth", "record", "wins"}
+        negative_terms = {"miss", "misses", "cuts", "cut", "downgrade", "downgraded", "probe", "lawsuit", "slump", "falls"}
+        if any(term in text for term in positive_terms):
+            return "Positive"
+        if any(term in text for term in negative_terms):
+            return "Negative"
+        return "Neutral"
+
+    @staticmethod
+    def _news_impact_reason(title: str, summary: str) -> str:
+        text = f"{title} {summary}".lower()
+        if any(term in text for term in {"earnings", "revenue", "margin", "guidance", "forecast"}):
+            return "Likely relevant to near-term estimates, revisions, or margin assumptions."
+        if any(term in text for term in {"ai", "chip", "datacenter", "data center", "cloud", "semiconductor"}):
+            return "Potential read-through for AI infrastructure demand and competitive positioning."
+        if any(term in text for term in {"deal", "partnership", "customer", "contract", "order"}):
+            return "Could affect revenue visibility, customer adoption, or backlog confidence."
+        if any(term in text for term in {"regulation", "export", "china", "antitrust", "lawsuit", "probe"}):
+            return "Could change regulatory, geopolitical, or legal risk in the thesis."
+        if any(term in text for term in {"upgrade", "downgrade", "target", "analyst"}):
+            return "May explain sentiment or multiple movement, but validate against fundamentals."
+        return "Worth scanning for thesis impact; no obvious model-driver keyword detected."
 
     def _build_valuation(
         self,

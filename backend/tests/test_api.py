@@ -69,6 +69,31 @@ def test_valuation_save_and_load(tmp_path):
     assert load_response.json()["bull"]["implied_return_pct"] == 28.5
 
 
+def test_saved_idea_save_list_and_delete(tmp_path):
+    use_snapshot_provider(tmp_path)
+    client = TestClient(main_module.app)
+    idea = {
+        "ticker": "NVDA",
+        "note": "Own the AI infrastructure earnings revision cycle.",
+        "priority": "High",
+        "created_at": "2026-06-16",
+        "updated_date": "2026-06-16",
+    }
+
+    save_response = client.put("/api/saved/NVDA", json=idea)
+    list_response = client.get("/api/saved")
+    delete_response = client.delete("/api/saved/NVDA")
+    empty_response = client.get("/api/saved")
+
+    assert save_response.status_code == 200
+    assert save_response.json()["note"] == idea["note"]
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["ticker"] == "NVDA"
+    assert delete_response.status_code == 200
+    assert delete_response.json()["deleted"] is True
+    assert empty_response.json() == []
+
+
 def test_refresh_and_export(tmp_path):
     use_snapshot_provider(tmp_path)
     client = TestClient(main_module.app)
