@@ -25,7 +25,7 @@ def build_substack_markdown(company: CompanyRecord) -> MarkdownExport:
         f"""
         # {profile.name} ({profile.ticker}): {thesis.one_liner or "Investment Thesis Draft"}
 
-        > Disclosure: This is personal research, not investment advice. Demo market data in the public app may be synthetic or sanitized.
+        > Disclosure: This is personal research, not investment advice. Market data may come from free/public sources or sanitized fixtures; validate figures before publishing.
 
         ## Setup
         - **Recommendation:** {company.recommendation.rating} ({company.recommendation.confidence} confidence)
@@ -33,7 +33,7 @@ def build_substack_markdown(company: CompanyRecord) -> MarkdownExport:
         - **Horizon:** {thesis.horizon}
         - **Sector:** {profile.sector} / {profile.industry}
         - **Market cap:** {profile.market_cap:.1f}B {profile.currency}
-        - **Current demo price:** {company.market.price:.2f}
+        - **Current quoted price:** {company.market.price:.2f}
 
         ## Recommendation Rationale
         {company.recommendation.rationale}

@@ -465,7 +465,9 @@ class YahooFinanceProvider(DataProvider):
         thesis: Thesis,
     ) -> Recommendation:
         implied_return = valuation.base.implied_return_pct
-        score = min(100, max(0, 50 + implied_return * 1.1 + market.relative_strength_pct * 0.2))
+        data_quality_warning = abs(market.relative_strength_pct) > 500 or abs(market.ytd_change_pct) > 500
+        bounded_relative_strength = min(100, max(-100, market.relative_strength_pct))
+        score = min(100, max(0, 50 + implied_return * 1.1 + bounded_relative_strength * 0.05))
         if implied_return >= 15:
             rating = "Buy"
         elif implied_return <= -10:
@@ -473,8 +475,21 @@ class YahooFinanceProvider(DataProvider):
         else:
             rating = "Hold"
         confidence = "Medium" if abs(implied_return) >= 10 and market.price > 0 else "Low"
+        if data_quality_warning:
+            confidence = "Low"
         positives = thesis.evidence[:3] or [f"Base-case implied return is {implied_return:.1f}%."]
         negatives = thesis.risks[:3] or ["Free data source; validate against filings and company materials before publishing."]
+        if data_quality_warning:
+            negatives = [
+                "Extreme Yahoo historical move detected; validate splits, corporate actions, and quote source before using momentum.",
+                *negatives,
+            ]
+        source_status = (
+            "Yahoo Finance via yfinance: live/public quote, market, and news fields when available; "
+            "fixture thesis/valuation scaffolding fills gaps"
+        )
+        if data_quality_warning:
+            source_status += "; data-quality warning: extreme historical move requires validation"
         return Recommendation(
             ticker=ticker,
             rating=rating,
@@ -487,9 +502,6 @@ class YahooFinanceProvider(DataProvider):
             ),
             positives=positives,
             negatives=negatives,
-            source_status=(
-                "Yahoo Finance via yfinance: live/public quote, market, and news fields when available; "
-                "fixture thesis/valuation scaffolding fills gaps"
-            ),
+            source_status=source_status,
             updated_date=date.today(),
         )

@@ -363,6 +363,9 @@ export default function App() {
     try {
       const record = await api.research(ticker);
       hydrateCompany(record, `${record.profile.ticker} research view ready`);
+      setQuery(record.profile.ticker);
+      setSuggestions([]);
+      setFocusedSearch(null);
       if (universe.some((row) => row.ticker === record.profile.ticker)) {
         setSelectedTicker(record.profile.ticker);
       }
@@ -453,6 +456,9 @@ export default function App() {
   async function openTicker(ticker: string) {
     const normalized = ticker.trim().toUpperCase();
     if (!normalized) return;
+    setQuery(normalized);
+    setSuggestions([]);
+    setFocusedSearch(null);
     if (universe.some((row) => row.ticker === normalized)) {
       setSelectedTicker(normalized);
       return;
@@ -992,7 +998,10 @@ function TickerSearch({
           value={query}
           onFocus={() => setFocusedSearch(surface)}
           onBlur={() => window.setTimeout(() => setFocusedSearch(null), 140)}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            setFocusedSearch(surface);
+            setQuery(event.target.value);
+          }}
           placeholder={placeholder}
           autoComplete="off"
         />
@@ -1158,9 +1167,13 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
     margin: point.ebitda_margin_pct ?? 0
   }));
   const rankedNews = [...company.news].sort((a, b) => newsRank(b) - newsRank(a));
+  const relativeStrengthSignal =
+    Math.abs(company.market.relative_strength_pct) > 500
+      ? `Relative strength is extreme at ${formatPct(company.market.relative_strength_pct)}; validate split or corporate-action adjustments before using it as a signal.`
+      : `Relative strength is ${formatPct(company.market.relative_strength_pct)}, which ${company.market.relative_strength_pct >= 0 ? "supports" : "pressures"} the current signal.`;
   const weeklySignals = [
     `${company.profile.ticker} moved ${formatPct(company.market.daily_change_pct)} today and ${formatPct(company.market.ytd_change_pct)} YTD.`,
-    `Relative strength is ${formatPct(company.market.relative_strength_pct)}, which ${company.market.relative_strength_pct >= 0 ? "supports" : "pressures"} the current signal.`,
+    relativeStrengthSignal,
     `${rankedNews.length} ticker-specific news item(s) are available for the current research refresh.`,
     `Base scenario shows ${selectedScenario ? formatPct(selectedScenario.implied_return_pct) : "n/a"} implied return.`
   ];
