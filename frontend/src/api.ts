@@ -15,6 +15,10 @@ import type {
 
 const TOKEN_KEY = "vrw_auth_token";
 
+type ApiRequestInit = RequestInit & {
+  expireOnUnauthorized?: boolean;
+};
+
 export function getStoredToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -27,9 +31,29 @@ export function clearStoredToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function readErrorMessage(response: Response) {
+  const text = await response.text();
+  if (!text) {
+    return `Request failed: ${response.status}`;
+  }
+  try {
+    const payload = JSON.parse(text) as { detail?: unknown; message?: unknown };
+    if (typeof payload.detail === "string") {
+      return payload.detail;
+    }
+    if (typeof payload.message === "string") {
+      return payload.message;
+    }
+  } catch {
+    // Plain-text errors are fine to show as-is.
+  }
+  return text;
+}
+
+async function request<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
+  const { expireOnUnauthorized = true, ...requestInit } = init;
   const token = getStoredToken();
-  const headers = new Headers(init.headers);
+  const headers = new Headers(requestInit.headers);
   if (!headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -38,13 +62,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   const response = await fetch(path, {
-    ...init,
+    ...requestInit,
     headers
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    if (response.status === 401) {
+    const message = await readErrorMessage(response);
+    if (response.status === 401 && expireOnUnauthorized) {
       clearStoredToken();
       window.dispatchEvent(new CustomEvent("vrw-auth-expired"));
     }
@@ -67,7 +91,11 @@ export const api = {
   signin: (email: string, password: string) =>
     request<AuthResponse>("/api/auth/signin", { method: "POST", body: JSON.stringify({ email, password }) }),
   me: () => request<AuthUser>("/api/auth/me"),
-  adminUsers: (adminKey: string) => request<AdminUser[]>("/api/admin/users", { headers: { "X-Admin-Key": adminKey } }),
+  adminUsers: (adminKey: string) =>
+    request<AdminUser[]>("/api/admin/users", {
+      headers: { "X-Admin-Key": adminKey },
+      expireOnUnauthorized: false
+    }),
   signout: () => request<MessageResponse>("/api/auth/signout", { method: "POST" }),
   forgotPassword: (email: string) =>
     request<MessageResponse>("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) }),

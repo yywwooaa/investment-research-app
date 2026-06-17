@@ -184,8 +184,21 @@ export default function App() {
       setAdminUsers(users);
       setAdminStatus(`${users.length} user${users.length === 1 ? "" : "s"} loaded.`);
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load users.";
       setAdminUsers([]);
-      setAdminStatus(error instanceof Error ? error.message : "Unable to load users.");
+      if (message.includes("Sign in required") || message.includes("Session expired")) {
+        setAdminStatus("Your login session expired after the last deploy. Sign in again, then reopen Admin.");
+        return;
+      }
+      if (message.includes("Admin key is not configured")) {
+        setAdminStatus("Render does not have VRW_ADMIN_KEY configured yet.");
+        return;
+      }
+      if (message.includes("Invalid admin key")) {
+        setAdminStatus("That admin key does not match VRW_ADMIN_KEY in Render.");
+        return;
+      }
+      setAdminStatus(message);
     }
   }
 
