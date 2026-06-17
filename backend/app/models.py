@@ -191,6 +191,13 @@ class AuthUser(BaseModel):
     created_at: datetime
 
 
+class AdminUser(BaseModel):
+    email: str
+    created_at: datetime
+    updated_at: datetime
+    active_sessions: int = 0
+
+
 class SignupRequest(BaseModel):
     email: str
     password: str = Field(min_length=8, max_length=256)

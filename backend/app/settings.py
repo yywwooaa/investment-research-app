@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     )
     auth_require_invite: bool = Field(default=False, alias="VRW_REQUIRE_INVITE")
     invite_code: str = Field(default="", alias="VRW_INVITE_CODE")
+    admin_key: str = Field(default="", alias="VRW_ADMIN_KEY")
     auth_session_days: int = Field(default=14, alias="VRW_AUTH_SESSION_DAYS")
     password_reset_minutes: int = Field(default=30, alias="VRW_PASSWORD_RESET_MINUTES")
     public_app_url: str = Field(default="http://127.0.0.1:5173", alias="VRW_PUBLIC_APP_URL")

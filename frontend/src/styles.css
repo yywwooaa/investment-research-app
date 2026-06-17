@@ -567,10 +567,121 @@ button:disabled {
   background: #25231c;
 }
 
+.icon-button.light {
+  color: #25211a;
+  border-color: #d7d0c1;
+  background: #fffaf0;
+}
+
 .primary-button {
   padding: 0 14px;
   color: #fffaf2;
   background: #256f78;
+}
+
+.admin-overlay {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(24, 23, 19, 0.58);
+}
+
+.admin-panel {
+  display: grid;
+  gap: 16px;
+  width: min(100%, 720px);
+  max-height: min(760px, calc(100vh - 44px));
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid #d8d1c2;
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 22px 56px rgba(20, 18, 15, 0.28);
+}
+
+.admin-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.admin-heading h2 {
+  margin: 4px 0 6px;
+  font-size: 26px;
+  letter-spacing: 0;
+}
+
+.admin-heading p,
+.admin-status {
+  margin: 0;
+  color: #5d584f;
+  line-height: 1.45;
+}
+
+.admin-key-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.admin-key-row label {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-key-row span,
+.admin-user-row small {
+  color: #6e6659;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.admin-key-row input {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  color: #201d18;
+  border: 1px solid #d7d0c1;
+  border-radius: 8px;
+  outline: 0;
+  background: #fffaf2;
+}
+
+.admin-user-list {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-user-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px 130px;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #e2dbcd;
+  border-radius: 8px;
+  background: #fbf7ee;
+}
+
+.admin-user-row strong,
+.admin-user-row span,
+.admin-user-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-user-row span {
+  color: #766f64;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .secondary-button {
@@ -1413,7 +1524,9 @@ button:disabled {
   .metric-grid,
   .scenario-grid,
   .form-row,
-  .weekly-list {
+  .weekly-list,
+  .admin-key-row,
+  .admin-user-row {
     grid-template-columns: 1fr;
   }
 

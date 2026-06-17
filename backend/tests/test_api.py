@@ -193,3 +193,24 @@ def test_auth_signin_and_password_reset(tmp_path):
     assert reset_response.status_code == 200
     assert old_signin.status_code == 401
     assert new_signin.status_code == 200
+
+
+def test_admin_users_requires_admin_key(tmp_path):
+    use_snapshot_provider(tmp_path)
+    original_key = main_module.settings.admin_key
+    main_module.settings.admin_key = "owner-secret"
+    try:
+        client = TestClient(main_module.app)
+        headers = auth_headers(client, email="owner@example.com")
+
+        no_key_response = client.get("/api/admin/users", headers=headers)
+        bad_key_response = client.get("/api/admin/users", headers={**headers, "X-Admin-Key": "wrong"})
+        ok_response = client.get("/api/admin/users", headers={**headers, "X-Admin-Key": "owner-secret"})
+
+        assert no_key_response.status_code == 403
+        assert bad_key_response.status_code == 403
+        assert ok_response.status_code == 200
+        assert ok_response.json()[0]["email"] == "owner@example.com"
+        assert "password_hash" not in ok_response.text
+    finally:
+        main_module.settings.admin_key = original_key

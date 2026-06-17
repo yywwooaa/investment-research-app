@@ -1,4 +1,5 @@
 import type {
+  AdminUser,
   AuthResponse,
   AuthUser,
   CompanyRecord,
@@ -62,6 +63,7 @@ export const api = {
   signin: (email: string, password: string) =>
     request<AuthResponse>("/api/auth/signin", { method: "POST", body: JSON.stringify({ email, password }) }),
   me: () => request<AuthUser>("/api/auth/me"),
+  adminUsers: (adminKey: string) => request<AdminUser[]>("/api/admin/users", { headers: { "X-Admin-Key": adminKey } }),
   signout: () => request<MessageResponse>("/api/auth/signout", { method: "POST" }),
   forgotPassword: (email: string) =>
     request<MessageResponse>("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) }),

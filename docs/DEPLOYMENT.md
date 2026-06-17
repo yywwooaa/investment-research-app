@@ -53,6 +53,7 @@ VRW_LOCAL_DATA_DIR=/tmp/variant-research-workbench
 VRW_SQLITE_PATH=/tmp/variant-research-workbench/workbench.sqlite3
 VRW_REQUIRE_INVITE=true
 VRW_INVITE_CODE=choose-a-private-code
+VRW_ADMIN_KEY=choose-a-separate-admin-key
 VRW_PUBLIC_APP_URL=https://your-render-url.onrender.com
 ```
 
@@ -71,8 +72,11 @@ Set these environment variables in Render:
 ```text
 VRW_REQUIRE_INVITE=true
 VRW_INVITE_CODE=your-private-invite-code
+VRW_ADMIN_KEY=your-private-admin-key
 VRW_PUBLIC_APP_URL=https://your-render-url.onrender.com
 ```
+
+The admin key unlocks the in-app admin user list after you sign in normally. Keep it separate from the invite code and do not share it with demo users.
 
 Forgot-password email works when SMTP is configured:
 

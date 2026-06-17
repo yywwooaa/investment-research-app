@@ -15,6 +15,8 @@ services:
         value: true
       - key: VRW_INVITE_CODE
         sync: false
+      - key: VRW_ADMIN_KEY
+        sync: false
       - key: VRW_PUBLIC_APP_URL
         sync: false
       - key: VRW_SMTP_HOST

@@ -13,6 +13,7 @@ The repository is designed to be public-GitHub safe. Demo fixtures are synthetic
 - Thesis editor for stance, horizon, one-liner, variant view, evidence, risks, and watch items.
 - Saved idea board for bookmarking tickers, setting priority, and writing the reason you want to revisit the name.
 - Signup/signin gate with invite-code protection and forgot-password reset flow.
+- Owner admin panel for viewing registered users with a private Render-only admin key.
 - Structured Substack Markdown export generated from your own thesis fields, not an LLM.
 - Bloomberg Desktop API adapter that can refresh configured reference fields locally when `blpapi` and Terminal API are available.
 - Buy/hold/sell recommendation cards with confidence, rationale, source status, positive drivers, negative drivers, and recent-news context.
@@ -101,6 +102,7 @@ The app currently separates the research workflow from the data source:
 - `GET /api/auth/me`
 - `POST /api/auth/forgot-password`
 - `POST /api/auth/reset-password`
+- `GET /api/admin/users`
 - `GET /api/search?q={query}`
 - `GET /api/universe`
 - `GET /api/company/{ticker}`

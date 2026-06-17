@@ -19,8 +19,11 @@ import {
   Save,
   Search,
   Sparkles,
+  ShieldCheck,
   Target,
-  TrendingUp
+  TrendingUp,
+  Users,
+  X
 } from "lucide-react";
 import {
   Bar,
@@ -35,6 +38,7 @@ import {
 } from "recharts";
 import { api, clearStoredToken, getStoredToken, setStoredToken } from "./api";
 import type {
+  AdminUser,
   AuthResponse,
   AuthUser,
   CompanyRecord,
@@ -124,6 +128,10 @@ export default function App() {
   const [authToken, setAuthToken] = useState(() => getStoredToken());
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authReady, setAuthReady] = useState(!getStoredToken());
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminKey, setAdminKey] = useState("");
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminStatus, setAdminStatus] = useState("");
   const [universe, setUniverse] = useState<UniverseRow[]>([]);
   const [selectedTicker, setSelectedTicker] = useState("NVDA");
   const [company, setCompany] = useState<CompanyRecord | null>(null);
@@ -159,7 +167,26 @@ export default function App() {
     setUniverse([]);
     setCompany(null);
     setSavedIdeas([]);
+    setAdminOpen(false);
+    setAdminUsers([]);
+    setAdminKey("");
     setStatus("Signed out.");
+  }
+
+  async function loadAdminUsers() {
+    if (!adminKey.trim()) {
+      setAdminStatus("Enter your admin key.");
+      return;
+    }
+    setAdminStatus("Loading users...");
+    try {
+      const users = await api.adminUsers(adminKey.trim());
+      setAdminUsers(users);
+      setAdminStatus(`${users.length} user${users.length === 1 ? "" : "s"} loaded.`);
+    } catch (error) {
+      setAdminUsers([]);
+      setAdminStatus(error instanceof Error ? error.message : "Unable to load users.");
+    }
   }
 
   function hydrateCompany(record: CompanyRecord, message = `${record.profile.ticker} loaded`) {
@@ -465,6 +492,7 @@ export default function App() {
   }
 
   return (
+    <>
     <div className="app-shell">
       <aside className="coverage-rail">
         <div className="brand-block">
@@ -524,6 +552,10 @@ export default function App() {
           <button className="signout-button" type="button" onClick={() => void signOut()} title={`Sign out ${authUser.email}`}>
             <LogOut size={15} aria-hidden="true" />
             Sign out
+          </button>
+          <button className="signout-button" type="button" onClick={() => setAdminOpen(true)} title="Open admin panel">
+            <ShieldCheck size={15} aria-hidden="true" />
+            Admin
           </button>
         </div>
       </aside>
@@ -662,6 +694,94 @@ export default function App() {
           </div>
         )}
       </main>
+    </div>
+    {adminOpen && (
+      <AdminPanel
+        adminKey={adminKey}
+        setAdminKey={setAdminKey}
+        users={adminUsers}
+        status={adminStatus}
+        onClose={() => setAdminOpen(false)}
+        onLoad={() => void loadAdminUsers()}
+      />
+    )}
+    </>
+  );
+}
+
+function AdminPanel({
+  adminKey,
+  setAdminKey,
+  users,
+  status,
+  onClose,
+  onLoad
+}: {
+  adminKey: string;
+  setAdminKey: Dispatch<SetStateAction<string>>;
+  users: AdminUser[];
+  status: string;
+  onClose: () => void;
+  onLoad: () => void;
+}) {
+  return (
+    <div className="admin-overlay" role="dialog" aria-modal="true" aria-label="Admin user panel">
+      <section className="admin-panel">
+        <div className="admin-heading">
+          <div>
+            <span className="eyebrow">Owner controls</span>
+            <h2>Admin Users</h2>
+            <p>Use your Render-only admin key to view registered accounts. Passwords and tokens are never shown.</p>
+          </div>
+          <button className="icon-button light" type="button" onClick={onClose} title="Close admin panel">
+            <X size={17} aria-hidden="true" />
+          </button>
+        </div>
+
+        <form
+          className="admin-key-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onLoad();
+          }}
+        >
+          <label>
+            <span>Admin key</span>
+            <input
+              type="password"
+              value={adminKey}
+              onChange={(event) => setAdminKey(event.target.value)}
+              placeholder="VRW_ADMIN_KEY"
+              autoComplete="off"
+            />
+          </label>
+          <button className="primary-button" type="submit">
+            <Users size={16} aria-hidden="true" />
+            Load users
+          </button>
+        </form>
+
+        {status && <p className="admin-status">{status}</p>}
+
+        <div className="admin-user-list">
+          {users.map((user) => (
+            <article key={user.email} className="admin-user-row">
+              <div>
+                <strong>{user.email}</strong>
+                <span>Created {new Date(user.created_at).toLocaleDateString()}</span>
+              </div>
+              <div>
+                <small>Active sessions</small>
+                <strong>{user.active_sessions}</strong>
+              </div>
+              <div>
+                <small>Updated</small>
+                <span>{new Date(user.updated_at).toLocaleDateString()}</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

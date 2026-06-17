@@ -184,6 +184,13 @@ export interface AuthUser {
   created_at: string;
 }
 
+export interface AdminUser {
+  email: string;
+  created_at: string;
+  updated_at: string;
+  active_sessions: number;
+}
+
 export interface AuthResponse {
   token: string;
   user: AuthUser;

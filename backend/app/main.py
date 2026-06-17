@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import sqlite3
 from datetime import timedelta
 from urllib.parse import urlencode
@@ -12,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.auth import hash_password, hash_token, new_token, normalize_email, send_reset_email, utc_now, verify_password
 from backend.app.exporter import build_substack_markdown
 from backend.app.models import (
+    AdminUser,
     AuthResponse,
     AuthUser,
     CompanyRecord,
@@ -99,6 +101,13 @@ def require_user(authorization: str | None = Header(default=None)) -> AuthUser:
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired. Sign in again.")
     return user
+
+
+def require_admin_key(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")) -> None:
+    if not settings.admin_key:
+        raise HTTPException(status_code=503, detail="Admin key is not configured.")
+    if not x_admin_key or not hmac.compare_digest(x_admin_key, settings.admin_key):
+        raise HTTPException(status_code=403, detail="Invalid admin key.")
 
 
 def _reset_link(request: Request, token: str) -> str:
@@ -273,6 +282,14 @@ def signin(payload: SigninRequest) -> AuthResponse:
 @app.get("/api/auth/me", response_model=AuthUser)
 def me(user: AuthUser = Depends(require_user)) -> AuthUser:
     return user
+
+
+@app.get("/api/admin/users", response_model=list[AdminUser])
+def admin_users(
+    _user: AuthUser = Depends(require_user),
+    _admin: None = Depends(require_admin_key),
+) -> list[AdminUser]:
+    return repository.list_admin_users()
 
 
 @app.post("/api/auth/signout", response_model=MessageResponse)

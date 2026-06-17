@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.app.auth import utc_now
-from backend.app.models import AuthUser, SavedIdea, ScenarioValuation, Thesis
+from backend.app.models import AdminUser, AuthUser, SavedIdea, ScenarioValuation, Thesis
 
 
 class ResearchRepository:
@@ -192,6 +192,35 @@ class ResearchRepository:
         if row is None:
             return None
         return AuthUser(email=row["email"], created_at=self._parse_datetime(row["created_at"]))
+
+    def list_admin_users(self) -> list[AdminUser]:
+        now = utc_now().isoformat()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    users.email,
+                    users.created_at,
+                    users.updated_at,
+                    COUNT(sessions.token_hash) AS active_sessions
+                FROM users
+                LEFT JOIN sessions
+                    ON sessions.email = users.email
+                    AND sessions.expires_at > ?
+                GROUP BY users.email, users.created_at, users.updated_at
+                ORDER BY users.created_at DESC
+                """,
+                (now,),
+            ).fetchall()
+        return [
+            AdminUser(
+                email=row["email"],
+                created_at=self._parse_datetime(row["created_at"]),
+                updated_at=self._parse_datetime(row["updated_at"]),
+                active_sessions=int(row["active_sessions"]),
+            )
+            for row in rows
+        ]
 
     def get_password_hash(self, email: str) -> str | None:
         with self._connect() as conn:
