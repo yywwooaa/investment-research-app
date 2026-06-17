@@ -607,6 +607,10 @@ export default function App() {
                 <span className="eyebrow">{company.profile.sector} / {company.profile.industry}</span>
                 <h2>{company.profile.name}</h2>
                 <p>{company.profile.description}</p>
+                <div className="data-source-chip">
+                  <DatabaseZap size={14} aria-hidden="true" />
+                  {company.recommendation.source_status}
+                </div>
               </div>
               <div className="header-actions">
                 <div className="price-tile">

@@ -82,13 +82,14 @@ class YahooFinanceProvider(DataProvider):
 
         yf_ticker = yf.Ticker(ticker)
         info = self._safe_info(yf_ticker)
+        fast_info = self._safe_fast_info(yf_ticker)
         history = self._safe_history(yf_ticker)
 
-        if not info and history is None and base is None:
+        if not info and not fast_info and history is None and base is None:
             raise KeyError(f"Yahoo Finance could not resolve ticker: {ticker}")
 
-        profile = self._build_profile(ticker, info, base)
-        market = self._build_market(info, history, base)
+        profile = self._build_profile(ticker, info, fast_info, base)
+        market = self._build_market(info, fast_info, history, base)
         financials = self._build_financials(info, base)
         news = self._build_news(yf_ticker, ticker, profile.name)
         peers = base.peers if base else []
@@ -111,6 +112,13 @@ class YahooFinanceProvider(DataProvider):
     def _safe_info(yf_ticker: Any) -> dict[str, Any]:
         try:
             return dict(yf_ticker.info or {})
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _safe_fast_info(yf_ticker: Any) -> dict[str, Any]:
+        try:
+            return dict(yf_ticker.fast_info or {})
         except Exception:
             return {}
 
@@ -138,8 +146,36 @@ class YahooFinanceProvider(DataProvider):
             return fallback
         return value
 
-    def _build_profile(self, ticker: str, info: dict[str, Any], base: CompanyRecord | None) -> CompanyProfile:
-        market_cap = self._num(info.get("marketCap"))
+    def _first_num(self, *values: Any) -> float | None:
+        for value in values:
+            number = self._num(value, None)
+            if number is not None:
+                return number
+        return None
+
+    def _market_cap(self, info: dict[str, Any], fast_info: dict[str, Any], price: float | None = None) -> float | None:
+        market_cap = self._first_num(info.get("marketCap"), fast_info.get("market_cap"))
+        if market_cap:
+            return market_cap
+
+        shares = self._first_num(
+            info.get("sharesOutstanding"),
+            info.get("impliedSharesOutstanding"),
+            fast_info.get("shares"),
+        )
+        if shares and price:
+            return shares * price
+        return None
+
+    def _build_profile(
+        self,
+        ticker: str,
+        info: dict[str, Any],
+        fast_info: dict[str, Any],
+        base: CompanyRecord | None,
+    ) -> CompanyProfile:
+        price = self._first_num(info.get("regularMarketPrice"), info.get("currentPrice"), fast_info.get("last_price"))
+        market_cap = self._market_cap(info, fast_info, price)
         return CompanyProfile(
             ticker=ticker,
             name=info.get("longName") or info.get("shortName") or (base.profile.name if base else ticker),
@@ -150,9 +186,19 @@ class YahooFinanceProvider(DataProvider):
             description=info.get("longBusinessSummary") or (base.profile.description if base else "Yahoo Finance profile loaded."),
         )
 
-    def _build_market(self, info: dict[str, Any], history: Any, base: CompanyRecord | None) -> MarketSnapshot:
-        price = self._num(info.get("regularMarketPrice"), None)
-        previous_close = self._num(info.get("regularMarketPreviousClose"), None)
+    def _build_market(
+        self,
+        info: dict[str, Any],
+        fast_info: dict[str, Any],
+        history: Any,
+        base: CompanyRecord | None,
+    ) -> MarketSnapshot:
+        price = self._first_num(info.get("regularMarketPrice"), info.get("currentPrice"), fast_info.get("last_price"))
+        previous_close = self._first_num(
+            info.get("regularMarketPreviousClose"),
+            info.get("previousClose"),
+            fast_info.get("previous_close"),
+        )
         if price is None and history is not None:
             price = self._num(history["Close"].iloc[-1], None)
         if previous_close is None and history is not None and len(history) > 1:
@@ -171,7 +217,7 @@ class YahooFinanceProvider(DataProvider):
             one_year_start = self._num(history["Close"].iloc[0], None)
             relative_strength = ((price / one_year_start - 1) * 100) if price and one_year_start else relative_strength
 
-        market_cap = self._num(info.get("marketCap"), None)
+        market_cap = self._market_cap(info, fast_info, price)
         enterprise_value = self._num(info.get("enterpriseValue"), None)
         revenue = self._num(info.get("totalRevenue"), None)
         ebitda = self._num(info.get("ebitda"), None)
@@ -441,6 +487,9 @@ class YahooFinanceProvider(DataProvider):
             ),
             positives=positives,
             negatives=negatives,
-            source_status="Yahoo Finance via yfinance: free/public, unofficial, research-use data",
+            source_status=(
+                "Yahoo Finance via yfinance: live/public quote, market, and news fields when available; "
+                "fixture thesis/valuation scaffolding fills gaps"
+            ),
             updated_date=date.today(),
         )

@@ -917,6 +917,22 @@ button:disabled {
   line-height: 1.55;
 }
 
+.data-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 860px;
+  margin-top: 10px;
+  padding: 6px 9px;
+  color: #4e625f;
+  border: 1px solid #c8d7d5;
+  border-radius: 8px;
+  background: #f4f8f7;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
 .eyebrow {
   color: #8a5b2f;
   font-size: 12px;
