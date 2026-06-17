@@ -40,6 +40,7 @@ import type {
   CompanyRecord,
   MarkdownExport,
   SavedIdea,
+  SearchSuggestion,
   ScenarioAssumption,
   ScenarioKey,
   ScenarioValuation,
@@ -51,6 +52,7 @@ import type {
 const tabs = ["Tear Sheet", "Valuation", "Thesis", "Export"] as const;
 type Tab = (typeof tabs)[number];
 type AuthMode = "signin" | "signup" | "forgot" | "reset";
+type SearchSurface = "rail" | "command";
 
 const stanceOptions: Stance[] = ["Buy", "Hold", "Sell", "Under Review"];
 const scenarioKeys: ScenarioKey[] = ["bull", "base", "bear"];
@@ -133,6 +135,8 @@ export default function App() {
   const [ideaPriority, setIdeaPriority] = useState<SavedIdea["priority"]>("Medium");
   const [activeTab, setActiveTab] = useState<Tab>("Tear Sheet");
   const [query, setQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
+  const [focusedSearch, setFocusedSearch] = useState<SearchSurface | null>(null);
   const [status, setStatus] = useState("Loading research workspace...");
   const [isBusy, setIsBusy] = useState(false);
 
@@ -239,6 +243,22 @@ export default function App() {
     setIdeaPriority(saved?.priority ?? "Medium");
   }, [company, savedIdeas]);
 
+  useEffect(() => {
+    if (!authToken || !authUser) return;
+    const search = query.trim();
+    if (!search) {
+      setSuggestions([]);
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      api
+        .search(search)
+        .then(setSuggestions)
+        .catch(() => setSuggestions([]));
+    }, 180);
+    return () => window.clearTimeout(handle);
+  }, [query, authToken, authUser]);
+
   const filteredUniverse = useMemo(() => {
     const search = query.trim().toLowerCase();
     if (!search) return universe;
@@ -291,7 +311,10 @@ export default function App() {
   }
 
   async function analyzeTicker() {
-    const ticker = query.trim().toUpperCase();
+    const raw = query.trim();
+    const exactSuggestion = suggestions.find((suggestion) => suggestion.ticker.toLowerCase() === raw.toLowerCase());
+    const shouldUseSuggestion = raw.length > 1 && suggestions[0] && !exactSuggestion;
+    const ticker = (exactSuggestion?.ticker ?? (shouldUseSuggestion ? suggestions[0].ticker : raw)).toUpperCase();
     if (!ticker) {
       setStatus("Type a ticker to analyze");
       return;
@@ -406,6 +429,13 @@ export default function App() {
     }
   }
 
+  async function selectSuggestion(suggestion: SearchSuggestion) {
+    setQuery(suggestion.ticker);
+    setSuggestions([]);
+    setFocusedSearch(null);
+    await openTicker(suggestion.ticker);
+  }
+
   function updateScenario(caseName: ScenarioKey, field: keyof ScenarioAssumption, value: number) {
     setValuationDraft((current) => {
       if (!current) return current;
@@ -445,25 +475,23 @@ export default function App() {
           </div>
         </div>
 
-        <form
-          className="search-box"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void analyzeTicker();
-          }}
-        >
-          <Search size={16} aria-hidden="true" />
-          <input
-            aria-label="Search universe"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search or type ticker"
-          />
-          <button type="submit" disabled={isBusy} title="Analyze typed ticker">
-            <Sparkles size={15} aria-hidden="true" />
-            Analyze
-          </button>
-        </form>
+        <TickerSearch
+          surface="rail"
+          formClassName="search-box"
+          iconSize={16}
+          query={query}
+          setQuery={setQuery}
+          suggestions={suggestions}
+          focusedSearch={focusedSearch}
+          setFocusedSearch={setFocusedSearch}
+          onSubmit={() => void analyzeTicker()}
+          onSelect={(suggestion) => void selectSuggestion(suggestion)}
+          isBusy={isBusy}
+          placeholder="Search name or ticker"
+          inputLabel="Search universe"
+          buttonLabel="Analyze"
+          buttonIconSize={15}
+        />
 
         <SavedIdeasPanel
           ideas={savedIdeas}
@@ -508,25 +536,23 @@ export default function App() {
                 <span className="eyebrow">Equity research workflow</span>
                 <h2>Type a ticker, pressure-test the thesis, save the idea.</h2>
               </div>
-              <form
-                className="command-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void analyzeTicker();
-                }}
-              >
-                <Search size={18} aria-hidden="true" />
-                <input
-                  aria-label="Analyze ticker"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="NVDA, AAPL, JPM..."
-                />
-                <button type="submit" disabled={isBusy}>
-                  <Sparkles size={16} aria-hidden="true" />
-                  Analyze
-                </button>
-              </form>
+              <TickerSearch
+                surface="command"
+                formClassName="command-form"
+                iconSize={18}
+                query={query}
+                setQuery={setQuery}
+                suggestions={suggestions}
+                focusedSearch={focusedSearch}
+                setFocusedSearch={setFocusedSearch}
+                onSubmit={() => void analyzeTicker()}
+                onSelect={(suggestion) => void selectSuggestion(suggestion)}
+                isBusy={isBusy}
+                placeholder="Apple, SanDisk, JPM..."
+                inputLabel="Analyze ticker"
+                buttonLabel="Analyze"
+                buttonIconSize={16}
+              />
             </section>
 
             <MarketDeskOverview desk={marketDesk} onOpen={(ticker) => void openTicker(ticker)} />
@@ -776,6 +802,91 @@ function AuthScreen({ onAuth }: { onAuth: (response: AuthResponse) => void }) {
         </div>
       </section>
     </main>
+  );
+}
+
+function TickerSearch({
+  surface,
+  formClassName,
+  iconSize,
+  query,
+  setQuery,
+  suggestions,
+  focusedSearch,
+  setFocusedSearch,
+  onSubmit,
+  onSelect,
+  isBusy,
+  placeholder,
+  inputLabel,
+  buttonLabel,
+  buttonIconSize
+}: {
+  surface: SearchSurface;
+  formClassName: string;
+  iconSize: number;
+  query: string;
+  setQuery: Dispatch<SetStateAction<string>>;
+  suggestions: SearchSuggestion[];
+  focusedSearch: SearchSurface | null;
+  setFocusedSearch: Dispatch<SetStateAction<SearchSurface | null>>;
+  onSubmit: () => void;
+  onSelect: (suggestion: SearchSuggestion) => void;
+  isBusy: boolean;
+  placeholder: string;
+  inputLabel: string;
+  buttonLabel: string;
+  buttonIconSize: number;
+}) {
+  const showDropdown = focusedSearch === surface && query.trim().length > 0 && suggestions.length > 0;
+
+  return (
+    <div className={`ticker-search-shell ${surface}`}>
+      <form
+        className={formClassName}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+      >
+        <Search size={iconSize} aria-hidden="true" />
+        <input
+          aria-label={inputLabel}
+          value={query}
+          onFocus={() => setFocusedSearch(surface)}
+          onBlur={() => window.setTimeout(() => setFocusedSearch(null), 140)}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={placeholder}
+          autoComplete="off"
+        />
+        <button type="submit" disabled={isBusy} title="Analyze typed ticker">
+          <Sparkles size={buttonIconSize} aria-hidden="true" />
+          {buttonLabel}
+        </button>
+      </form>
+
+      {showDropdown && (
+        <div className="suggestion-menu" role="listbox" aria-label="Ticker suggestions">
+          {suggestions.map((suggestion) => (
+            <button
+              key={`${suggestion.ticker}-${suggestion.source}`}
+              type="button"
+              role="option"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onSelect(suggestion)}
+            >
+              <span className="suggestion-ticker">{suggestion.ticker}</span>
+              <span>
+                <strong>{suggestion.name}</strong>
+                <small>
+                  {[suggestion.exchange, suggestion.quote_type, suggestion.source].filter(Boolean).join(" / ")}
+                </small>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

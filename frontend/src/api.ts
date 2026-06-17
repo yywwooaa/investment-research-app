@@ -6,6 +6,7 @@ import type {
   MessageResponse,
   RefreshResult,
   SavedIdea,
+  SearchSuggestion,
   ScenarioValuation,
   Thesis,
   UniverseRow
@@ -66,6 +67,7 @@ export const api = {
     request<MessageResponse>("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) }),
   resetPassword: (token: string, password: string) =>
     request<MessageResponse>("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password }) }),
+  search: (query: string) => request<SearchSuggestion[]>(`/api/search?q=${encodeURIComponent(query)}`),
   universe: () => request<UniverseRow[]>("/api/universe"),
   company: (ticker: string) => request<CompanyRecord>(`/api/company/${ticker}`),
   research: (ticker: string) => request<CompanyRecord>(`/api/research/${ticker}`, { method: "POST" }),

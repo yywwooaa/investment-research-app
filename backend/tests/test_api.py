@@ -50,6 +50,21 @@ def test_company_record_shape(tmp_path):
     assert payload["news"]
 
 
+def test_search_suggestions_resolve_names_and_partials(tmp_path):
+    use_snapshot_provider(tmp_path)
+    client = TestClient(main_module.app)
+    headers = auth_headers(client)
+
+    apple_response = client.get("/api/search?q=apple", headers=headers)
+    sandisk_response = client.get("/api/search?q=sand", headers=headers)
+    coverage_response = client.get("/api/search?q=nvidia", headers=headers)
+
+    assert apple_response.status_code == 200
+    assert any(item["ticker"] == "AAPL" for item in apple_response.json())
+    assert any(item["ticker"] == "SNDK" for item in sandisk_response.json())
+    assert coverage_response.json()[0]["ticker"] == "NVDA"
+
+
 def test_thesis_save_and_load(tmp_path):
     use_snapshot_provider(tmp_path)
     client = TestClient(main_module.app)
@@ -142,8 +157,10 @@ def test_research_routes_require_auth(tmp_path):
     client = TestClient(main_module.app)
 
     response = client.get("/api/universe")
+    search_response = client.get("/api/search?q=apple")
 
     assert response.status_code == 401
+    assert search_response.status_code == 401
 
 
 def test_auth_signin_and_password_reset(tmp_path):

@@ -4,7 +4,7 @@ import sqlite3
 from datetime import timedelta
 from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +21,7 @@ from backend.app.models import (
     RefreshResult,
     ResetPasswordRequest,
     SavedIdea,
+    SearchSuggestion,
     ScenarioValuation,
     SigninRequest,
     SignupRequest,
@@ -50,6 +51,19 @@ elif settings.data_source.lower() == "yahoo":
 else:
     provider = snapshot_provider
 repository = ResearchRepository(settings.sqlite_path)
+
+COMMON_SEARCH_SUGGESTIONS = [
+    SearchSuggestion(ticker="AAPL", name="Apple Inc.", exchange="NASDAQ", sector="Technology", industry="Consumer Electronics", source="Common US equity"),
+    SearchSuggestion(ticker="SNDK", name="Sandisk Corporation", exchange="NASDAQ", sector="Technology", industry="Computer Hardware", source="Common US equity"),
+    SearchSuggestion(ticker="TSLA", name="Tesla, Inc.", exchange="NASDAQ", sector="Consumer Cyclical", industry="Auto Manufacturers", source="Common US equity"),
+    SearchSuggestion(ticker="JPM", name="JPMorgan Chase & Co.", exchange="NYSE", sector="Financial Services", industry="Banks", source="Common US equity"),
+    SearchSuggestion(ticker="BAC", name="Bank of America Corporation", exchange="NYSE", sector="Financial Services", industry="Banks", source="Common US equity"),
+    SearchSuggestion(ticker="NFLX", name="Netflix, Inc.", exchange="NASDAQ", sector="Communication Services", industry="Entertainment", source="Common US equity"),
+    SearchSuggestion(ticker="CRM", name="Salesforce, Inc.", exchange="NYSE", sector="Technology", industry="Software", source="Common US equity"),
+    SearchSuggestion(ticker="ORCL", name="Oracle Corporation", exchange="NYSE", sector="Technology", industry="Software", source="Common US equity"),
+    SearchSuggestion(ticker="SHOP", name="Shopify Inc.", exchange="NYSE", sector="Technology", industry="Software", source="Common US equity"),
+    SearchSuggestion(ticker="SQ", name="Block, Inc.", exchange="NYSE", sector="Technology", industry="Financial Technology", source="Common US equity"),
+]
 
 app = FastAPI(title=settings.app_name)
 allowed_origins = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
@@ -108,6 +122,117 @@ def _send_or_log_reset_email(email: str, link: str) -> None:
         )
         return
     print(f"Password reset requested for {email}. Configure SMTP to email this link: {link}")
+
+
+def _search_rank(query: str, suggestion: SearchSuggestion) -> tuple[int, str]:
+    needle = query.lower()
+    ticker = suggestion.ticker.lower()
+    name = suggestion.name.lower()
+    words = [word.strip(".,()&-").lower() for word in suggestion.name.split()]
+    if ticker == needle:
+        rank = 0
+    elif ticker.startswith(needle):
+        rank = 1
+    elif words and words[0].startswith(needle):
+        rank = 2
+    elif any(word.startswith(needle) for word in words):
+        rank = 3
+    elif needle in name or needle in ticker:
+        rank = 4
+    else:
+        rank = 9
+    return rank, suggestion.ticker
+
+
+def _matches_search(query: str, suggestion: SearchSuggestion) -> bool:
+    haystack = " ".join(
+        [
+            suggestion.ticker,
+            suggestion.name,
+            suggestion.exchange,
+            suggestion.sector,
+            suggestion.industry,
+        ]
+    ).lower()
+    return query.lower() in haystack
+
+
+def _coverage_suggestions(query: str) -> list[SearchSuggestion]:
+    suggestions = [
+        SearchSuggestion(
+            ticker=record.profile.ticker,
+            name=record.profile.name,
+            exchange="Coverage",
+            sector=record.profile.sector,
+            industry=record.profile.industry,
+            source="Coverage universe",
+        )
+        for record in snapshot_provider.list_companies()
+    ]
+    return sorted(
+        [suggestion for suggestion in suggestions if _matches_search(query, suggestion)],
+        key=lambda suggestion: _search_rank(query, suggestion),
+    )
+
+
+def _common_suggestions(query: str) -> list[SearchSuggestion]:
+    return sorted(
+        [suggestion for suggestion in COMMON_SEARCH_SUGGESTIONS if _matches_search(query, suggestion)],
+        key=lambda suggestion: _search_rank(query, suggestion),
+    )
+
+
+def _yahoo_suggestions(query: str, limit: int) -> list[SearchSuggestion]:
+    if settings.data_source.lower() != "yahoo":
+        return []
+    try:
+        import yfinance as yf
+
+        search = yf.Search(
+            query,
+            max_results=limit,
+            news_count=0,
+            lists_count=0,
+            include_research=False,
+            include_cultural_assets=False,
+            timeout=5,
+            raise_errors=False,
+        )
+    except Exception:
+        return []
+
+    suggestions: list[SearchSuggestion] = []
+    for quote in getattr(search, "quotes", []) or []:
+        symbol = str(quote.get("symbol") or "").upper().strip()
+        quote_type = str(quote.get("quoteType") or quote.get("typeDisp") or "")
+        if not symbol or "=" in symbol or quote_type.upper() not in {"EQUITY", "ETF"}:
+            continue
+        name = quote.get("longname") or quote.get("shortname") or symbol
+        suggestions.append(
+            SearchSuggestion(
+                ticker=symbol,
+                name=str(name),
+                exchange=str(quote.get("exchDisp") or quote.get("exchange") or ""),
+                quote_type=quote_type.title() if quote_type else "Equity",
+                sector=str(quote.get("sector") or ""),
+                industry=str(quote.get("industry") or ""),
+                source="Yahoo Finance",
+            )
+        )
+    return suggestions
+
+
+def _dedupe_suggestions(suggestions: list[SearchSuggestion], limit: int) -> list[SearchSuggestion]:
+    seen: set[str] = set()
+    deduped: list[SearchSuggestion] = []
+    for suggestion in suggestions:
+        if suggestion.ticker in seen:
+            continue
+        seen.add(suggestion.ticker)
+        deduped.append(suggestion)
+        if len(deduped) >= limit:
+            break
+    return deduped
 
 
 @app.get("/api/health")
@@ -207,6 +332,23 @@ def get_universe(_user: AuthUser = Depends(require_user)) -> list[UniverseRow]:
             )
         )
     return rows
+
+
+@app.get("/api/search", response_model=list[SearchSuggestion])
+def search_symbols(
+    q: str = Query(min_length=1, max_length=80),
+    limit: int = Query(default=8, ge=1, le=12),
+    _user: AuthUser = Depends(require_user),
+) -> list[SearchSuggestion]:
+    query = q.strip()
+    if not query:
+        return []
+    suggestions = [
+        *_coverage_suggestions(query),
+        *_common_suggestions(query),
+        *_yahoo_suggestions(query, limit),
+    ]
+    return _dedupe_suggestions(suggestions, limit)
 
 
 @app.get("/api/company/{ticker}", response_model=CompanyRecord)

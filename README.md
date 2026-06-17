@@ -101,6 +101,7 @@ The app currently separates the research workflow from the data source:
 - `GET /api/auth/me`
 - `POST /api/auth/forgot-password`
 - `POST /api/auth/reset-password`
+- `GET /api/search?q={query}`
 - `GET /api/universe`
 - `GET /api/company/{ticker}`
 - `POST /api/data/refresh`

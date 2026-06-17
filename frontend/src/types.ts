@@ -156,6 +156,16 @@ export interface SavedIdea {
   updated_date: string;
 }
 
+export interface SearchSuggestion {
+  ticker: string;
+  name: string;
+  exchange: string;
+  quote_type: string;
+  sector: string;
+  industry: string;
+  source: string;
+}
+
 export interface RefreshResult {
   source: "snapshot" | "bloomberg" | "yahoo";
   refreshed: boolean;

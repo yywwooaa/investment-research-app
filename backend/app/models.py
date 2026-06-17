@@ -163,6 +163,16 @@ class SavedIdea(BaseModel):
     updated_date: date = Field(default_factory=date.today)
 
 
+class SearchSuggestion(BaseModel):
+    ticker: str
+    name: str
+    exchange: str = ""
+    quote_type: str = "Equity"
+    sector: str = ""
+    industry: str = ""
+    source: str = "Coverage"
+
+
 class RefreshResult(BaseModel):
     source: Literal["snapshot", "bloomberg", "yahoo"]
     refreshed: bool
