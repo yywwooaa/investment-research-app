@@ -37,6 +37,17 @@ class Settings(BaseSettings):
         default="http://localhost:5173,http://127.0.0.1:5173",
         alias="VRW_ALLOWED_ORIGINS",
     )
+    auth_require_invite: bool = Field(default=False, alias="VRW_REQUIRE_INVITE")
+    invite_code: str = Field(default="", alias="VRW_INVITE_CODE")
+    auth_session_days: int = Field(default=14, alias="VRW_AUTH_SESSION_DAYS")
+    password_reset_minutes: int = Field(default=30, alias="VRW_PASSWORD_RESET_MINUTES")
+    public_app_url: str = Field(default="http://127.0.0.1:5173", alias="VRW_PUBLIC_APP_URL")
+    smtp_host: str = Field(default="", alias="VRW_SMTP_HOST")
+    smtp_port: int = Field(default=465, alias="VRW_SMTP_PORT")
+    smtp_username: str = Field(default="", alias="VRW_SMTP_USERNAME")
+    smtp_password: str = Field(default="", alias="VRW_SMTP_PASSWORD")
+    smtp_from: str = Field(default="", alias="VRW_SMTP_FROM")
+    smtp_tls: bool = Field(default=True, alias="VRW_SMTP_TLS")
 
 
 @lru_cache

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -174,3 +174,37 @@ class MarkdownExport(BaseModel):
     ticker: str
     filename: str
     markdown: str
+
+
+class AuthUser(BaseModel):
+    email: str
+    created_at: datetime
+
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=8, max_length=256)
+    invite_code: str | None = None
+
+
+class SigninRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=1, max_length=256)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str = Field(min_length=8, max_length=256)
+
+
+class AuthResponse(BaseModel):
+    token: str
+    user: AuthUser
+
+
+class MessageResponse(BaseModel):
+    message: str

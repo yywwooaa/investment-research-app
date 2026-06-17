@@ -11,4 +11,21 @@ services:
         value: /tmp/variant-research-workbench
       - key: VRW_SQLITE_PATH
         value: /tmp/variant-research-workbench/workbench.sqlite3
-
+      - key: VRW_REQUIRE_INVITE
+        value: true
+      - key: VRW_INVITE_CODE
+        sync: false
+      - key: VRW_PUBLIC_APP_URL
+        sync: false
+      - key: VRW_SMTP_HOST
+        sync: false
+      - key: VRW_SMTP_PORT
+        value: 465
+      - key: VRW_SMTP_USERNAME
+        sync: false
+      - key: VRW_SMTP_PASSWORD
+        sync: false
+      - key: VRW_SMTP_FROM
+        sync: false
+      - key: VRW_SMTP_TLS
+        value: true

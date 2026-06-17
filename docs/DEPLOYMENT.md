@@ -16,6 +16,8 @@ The included `Dockerfile`:
 
 The included `render.yaml` sets the same public-demo environment variables and uses `/api/health` as the health check.
 
+The public deployment also enables a lightweight auth gate. Visitors can load the signin/signup page, but research API calls require an authenticated session.
+
 ## What You Need To Do
 
 1. Create a new GitHub repository.
@@ -49,6 +51,9 @@ Do not paste GitHub personal access tokens into the app or into AI chat.
 VRW_DATA_SOURCE=yahoo
 VRW_LOCAL_DATA_DIR=/tmp/variant-research-workbench
 VRW_SQLITE_PATH=/tmp/variant-research-workbench/workbench.sqlite3
+VRW_REQUIRE_INVITE=true
+VRW_INVITE_CODE=choose-a-private-code
+VRW_PUBLIC_APP_URL=https://your-render-url.onrender.com
 ```
 
 7. Wait for the first build. The public app URL will look like:
@@ -56,6 +61,31 @@ VRW_SQLITE_PATH=/tmp/variant-research-workbench/workbench.sqlite3
 ```text
 https://variant-research-workbench.onrender.com
 ```
+
+## Auth And Email
+
+The app uses local SQLite auth with hashed passwords, bearer sessions, and password reset tokens. On Render, the database path points to `/tmp`, which means accounts are suitable for a lightweight portfolio gate but may reset when the service restarts or redeploys. For durable accounts, move auth storage to Render Postgres.
+
+Set these environment variables in Render:
+
+```text
+VRW_REQUIRE_INVITE=true
+VRW_INVITE_CODE=your-private-invite-code
+VRW_PUBLIC_APP_URL=https://your-render-url.onrender.com
+```
+
+Forgot-password email works when SMTP is configured:
+
+```text
+VRW_SMTP_HOST=smtp.example.com
+VRW_SMTP_PORT=465
+VRW_SMTP_USERNAME=your-smtp-username
+VRW_SMTP_PASSWORD=your-smtp-password
+VRW_SMTP_FROM=you@example.com
+VRW_SMTP_TLS=true
+```
+
+If SMTP is not configured, password reset links are printed to server logs instead of being emailed. Do not commit SMTP passwords or invite codes to GitHub.
 
 ## Vercel Option
 

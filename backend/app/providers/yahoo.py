@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -126,7 +127,8 @@ class YahooFinanceProvider(DataProvider):
         try:
             if value is None:
                 return fallback
-            return float(value)
+            number = float(value)
+            return number if math.isfinite(number) else fallback
         except (TypeError, ValueError):
             return fallback
 

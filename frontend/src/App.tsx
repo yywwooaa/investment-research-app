@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, FormEvent, SetStateAction } from "react";
 import {
   BarChart3,
   BookmarkCheck,
@@ -9,7 +9,11 @@ import {
   FileText,
   Flame,
   Gauge,
+  KeyRound,
   LineChart as LineChartIcon,
+  Lock,
+  LogOut,
+  Mail,
   Newspaper,
   RefreshCw,
   Save,
@@ -29,8 +33,10 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import { api } from "./api";
+import { api, clearStoredToken, getStoredToken, setStoredToken } from "./api";
 import type {
+  AuthResponse,
+  AuthUser,
   CompanyRecord,
   MarkdownExport,
   SavedIdea,
@@ -44,6 +50,7 @@ import type {
 
 const tabs = ["Tear Sheet", "Valuation", "Thesis", "Export"] as const;
 type Tab = (typeof tabs)[number];
+type AuthMode = "signin" | "signup" | "forgot" | "reset";
 
 const stanceOptions: Stance[] = ["Buy", "Hold", "Sell", "Under Review"];
 const scenarioKeys: ScenarioKey[] = ["bull", "base", "bear"];
@@ -112,6 +119,9 @@ function newsRank(item: CompanyRecord["news"][number]) {
 }
 
 export default function App() {
+  const [authToken, setAuthToken] = useState(() => getStoredToken());
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authReady, setAuthReady] = useState(!getStoredToken());
   const [universe, setUniverse] = useState<UniverseRow[]>([]);
   const [selectedTicker, setSelectedTicker] = useState("NVDA");
   const [company, setCompany] = useState<CompanyRecord | null>(null);
@@ -125,6 +135,28 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Loading research workspace...");
   const [isBusy, setIsBusy] = useState(false);
+
+  function handleAuth(response: AuthResponse) {
+    setStoredToken(response.token);
+    setAuthToken(response.token);
+    setAuthUser(response.user);
+    setStatus("Signed in. Loading research workspace...");
+  }
+
+  async function signOut() {
+    try {
+      await api.signout();
+    } catch {
+      // Session may already be expired; local cleanup is enough.
+    }
+    clearStoredToken();
+    setAuthToken(null);
+    setAuthUser(null);
+    setUniverse([]);
+    setCompany(null);
+    setSavedIdeas([]);
+    setStatus("Signed out.");
+  }
 
   function hydrateCompany(record: CompanyRecord, message = `${record.profile.ticker} loaded`) {
     setCompany(record);
@@ -160,16 +192,45 @@ export default function App() {
   }
 
   useEffect(() => {
-    Promise.all([loadUniverse(), loadSavedIdeas()])
-      .then(() => setStatus("Snapshot universe ready"))
-      .catch((error) => setStatus(error instanceof Error ? error.message : "Unable to load workspace"));
+    if (!authToken) {
+      setAuthReady(true);
+      return;
+    }
+    api.me()
+      .then((user) => setAuthUser(user))
+      .catch(() => {
+        clearStoredToken();
+        setAuthToken(null);
+        setAuthUser(null);
+      })
+      .finally(() => setAuthReady(true));
+  }, [authToken]);
+
+  useEffect(() => {
+    const expire = () => {
+      setAuthToken(null);
+      setAuthUser(null);
+      setUniverse([]);
+      setCompany(null);
+      setStatus("Session expired. Sign in again.");
+    };
+    window.addEventListener("vrw-auth-expired", expire);
+    return () => window.removeEventListener("vrw-auth-expired", expire);
   }, []);
 
   useEffect(() => {
+    if (!authToken || !authUser) return;
+    Promise.all([loadUniverse(), loadSavedIdeas()])
+      .then(() => setStatus("Snapshot universe ready"))
+      .catch((error) => setStatus(error instanceof Error ? error.message : "Unable to load workspace"));
+  }, [authToken, authUser]);
+
+  useEffect(() => {
+    if (!authToken || !authUser) return;
     if (universe.length === 0 || universe.some((row) => row.ticker === selectedTicker)) {
       void loadCompany(selectedTicker);
     }
-  }, [selectedTicker, universe]);
+  }, [selectedTicker, universe, authToken, authUser]);
 
   useEffect(() => {
     if (!company) return;
@@ -358,6 +419,21 @@ export default function App() {
     });
   }
 
+  if (!authReady) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card compact">
+          <div className="brand-mark">VR</div>
+          <p>Checking session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!authToken || !authUser) {
+    return <AuthScreen onAuth={handleAuth} />;
+  }
+
   return (
     <div className="app-shell">
       <aside className="coverage-rail">
@@ -417,6 +493,10 @@ export default function App() {
             <RefreshCw size={17} aria-hidden="true" />
           </button>
           <span>{status}</span>
+          <button className="signout-button" type="button" onClick={() => void signOut()} title={`Sign out ${authUser.email}`}>
+            <LogOut size={15} aria-hidden="true" />
+            Sign out
+          </button>
         </div>
       </aside>
 
@@ -557,6 +637,145 @@ export default function App() {
         )}
       </main>
     </div>
+  );
+}
+
+function AuthScreen({ onAuth }: { onAuth: (response: AuthResponse) => void }) {
+  const resetToken = new URLSearchParams(window.location.search).get("reset_token") ?? "";
+  const [mode, setMode] = useState<AuthMode>(resetToken ? "reset" : "signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [message, setMessage] = useState(resetToken ? "Enter a new password to finish resetting your account." : "");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSubmitting(true);
+    setMessage("");
+    try {
+      if (mode === "signin") {
+        const response = await api.signin(email, password);
+        onAuth(response);
+        return;
+      }
+      if (mode === "signup") {
+        const response = await api.signup(email, password, inviteCode);
+        onAuth(response);
+        return;
+      }
+      if (mode === "forgot") {
+        const response = await api.forgotPassword(email);
+        setMessage(response.message);
+        return;
+      }
+      const response = await api.resetPassword(resetToken, password);
+      setMessage(response.message);
+      window.history.replaceState({}, "", window.location.pathname);
+      setMode("signin");
+      setPassword("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Authentication failed.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-card">
+        <div className="auth-brand">
+          <div className="brand-mark">VR</div>
+          <div>
+            <span className="eyebrow">Private research workspace</span>
+            <h1>Variant Research Workbench</h1>
+          </div>
+        </div>
+        <p className="auth-copy">
+          Sign in to access the live research dashboard, ticker analysis, saved ideas, and Substack export tools.
+        </p>
+
+        <div className="auth-tabs" aria-label="Authentication mode">
+          <button type="button" className={mode === "signin" ? "active" : ""} onClick={() => setMode("signin")}>
+            Sign in
+          </button>
+          <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")}>
+            Sign up
+          </button>
+        </div>
+
+        <form className="auth-form" onSubmit={(event) => void submitAuth(event)}>
+          {mode !== "reset" && (
+            <label className="auth-field">
+              <span>Email</span>
+              <div>
+                <Mail size={16} aria-hidden="true" />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="you@example.com"
+                  required
+                />
+              </div>
+            </label>
+          )}
+
+          {mode !== "forgot" && (
+            <label className="auth-field">
+              <span>{mode === "reset" ? "New password" : "Password"}</span>
+              <div>
+                <Lock size={16} aria-hidden="true" />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="At least 8 characters"
+                  required
+                  minLength={8}
+                />
+              </div>
+            </label>
+          )}
+
+          {mode === "signup" && (
+            <label className="auth-field">
+              <span>Invite code</span>
+              <div>
+                <KeyRound size={16} aria-hidden="true" />
+                <input
+                  value={inviteCode}
+                  onChange={(event) => setInviteCode(event.target.value)}
+                  placeholder="Required on the public deployment"
+                />
+              </div>
+            </label>
+          )}
+
+          <button className="auth-submit" type="submit" disabled={isSubmitting || (mode === "reset" && !resetToken)}>
+            {mode === "signin" && "Sign in"}
+            {mode === "signup" && "Create account"}
+            {mode === "forgot" && "Send reset email"}
+            {mode === "reset" && "Reset password"}
+          </button>
+        </form>
+
+        {message && <p className="auth-message">{message}</p>}
+
+        <div className="auth-links">
+          {mode !== "forgot" && mode !== "reset" && (
+            <button type="button" onClick={() => setMode("forgot")}>
+              Forgot password?
+            </button>
+          )}
+          {mode !== "signin" && (
+            <button type="button" onClick={() => setMode("signin")}>
+              Back to sign in
+            </button>
+          )}
+        </div>
+      </section>
+    </main>
   );
 }
 

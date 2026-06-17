@@ -168,3 +168,17 @@ export interface MarkdownExport {
   filename: string;
   markdown: string;
 }
+
+export interface AuthUser {
+  email: string;
+  created_at: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: AuthUser;
+}
+
+export interface MessageResponse {
+  message: string;
+}

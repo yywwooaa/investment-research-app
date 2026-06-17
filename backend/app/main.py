@@ -1,17 +1,29 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+import sqlite3
+from datetime import timedelta
+from urllib.parse import urlencode
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.app.auth import hash_password, hash_token, new_token, normalize_email, send_reset_email, utc_now, verify_password
 from backend.app.exporter import build_substack_markdown
 from backend.app.models import (
+    AuthResponse,
+    AuthUser,
     CompanyRecord,
+    ForgotPasswordRequest,
     MarkdownExport,
+    MessageResponse,
     RefreshResult,
+    ResetPasswordRequest,
     SavedIdea,
     ScenarioValuation,
+    SigninRequest,
+    SignupRequest,
     Thesis,
     UniverseRow,
 )
@@ -56,14 +68,117 @@ def _with_local_overrides(record: CompanyRecord) -> CompanyRecord:
     return record.model_copy(update={"thesis": thesis, "valuation": valuation})
 
 
+def _create_auth_response(user: AuthUser) -> AuthResponse:
+    token = new_token()
+    expires_at = utc_now() + timedelta(days=settings.auth_session_days)
+    repository.create_session(user.email, hash_token(token), expires_at)
+    return AuthResponse(token=token, user=user)
+
+
+def require_user(authorization: str | None = Header(default=None)) -> AuthUser:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in required.")
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in required.")
+    user = repository.get_user_by_session(hash_token(token))
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired. Sign in again.")
+    return user
+
+
+def _reset_link(request: Request, token: str) -> str:
+    base_url = settings.public_app_url.strip().rstrip("/")
+    if not base_url:
+        base_url = str(request.base_url).rstrip("/")
+    return f"{base_url}/?{urlencode({'reset_token': token})}"
+
+
+def _send_or_log_reset_email(email: str, link: str) -> None:
+    if settings.smtp_host and settings.smtp_from:
+        send_reset_email(
+            to_email=email,
+            reset_link=link,
+            smtp_host=settings.smtp_host,
+            smtp_port=settings.smtp_port,
+            smtp_username=settings.smtp_username,
+            smtp_password=settings.smtp_password,
+            smtp_from=settings.smtp_from,
+            use_tls=settings.smtp_tls,
+        )
+        return
+    print(f"Password reset requested for {email}. Configure SMTP to email this link: {link}")
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     frontend_status = "served" if _frontend_dist_available() else "api-only"
     return {"status": "ok", "source": settings.data_source, "frontend": frontend_status}
 
 
+@app.post("/api/auth/signup", response_model=AuthResponse)
+def signup(payload: SignupRequest) -> AuthResponse:
+    email = normalize_email(payload.email)
+    if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    if settings.auth_require_invite:
+        if not settings.invite_code:
+            raise HTTPException(status_code=503, detail="Signup is disabled until an invite code is configured.")
+        if (payload.invite_code or "").strip() != settings.invite_code:
+            raise HTTPException(status_code=403, detail="Invite code is required.")
+    try:
+        user = repository.create_user(email, hash_password(payload.password))
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="An account already exists for this email.") from exc
+    return _create_auth_response(user)
+
+
+@app.post("/api/auth/signin", response_model=AuthResponse)
+def signin(payload: SigninRequest) -> AuthResponse:
+    email = normalize_email(payload.email)
+    stored_hash = repository.get_password_hash(email)
+    if stored_hash is None or not verify_password(payload.password, stored_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    user = repository.get_user(email)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    return _create_auth_response(user)
+
+
+@app.get("/api/auth/me", response_model=AuthUser)
+def me(user: AuthUser = Depends(require_user)) -> AuthUser:
+    return user
+
+
+@app.post("/api/auth/signout", response_model=MessageResponse)
+def signout(authorization: str | None = Header(default=None)) -> MessageResponse:
+    if authorization and authorization.startswith("Bearer "):
+        repository.delete_session(hash_token(authorization.removeprefix("Bearer ").strip()))
+    return MessageResponse(message="Signed out.")
+
+
+@app.post("/api/auth/forgot-password", response_model=MessageResponse)
+def forgot_password(payload: ForgotPasswordRequest, request: Request) -> MessageResponse:
+    email = normalize_email(payload.email)
+    if repository.get_user(email):
+        token = new_token()
+        expires_at = utc_now() + timedelta(minutes=settings.password_reset_minutes)
+        repository.create_password_reset(email, hash_token(token), expires_at)
+        _send_or_log_reset_email(email, _reset_link(request, token))
+    return MessageResponse(message="If that account exists, a reset link has been sent.")
+
+
+@app.post("/api/auth/reset-password", response_model=MessageResponse)
+def reset_password(payload: ResetPasswordRequest) -> MessageResponse:
+    email = repository.consume_password_reset(hash_token(payload.token.strip()))
+    if email is None:
+        raise HTTPException(status_code=400, detail="Reset link is invalid or expired.")
+    repository.update_password(email, hash_password(payload.password))
+    return MessageResponse(message="Password reset. You can sign in now.")
+
+
 @app.get("/api/universe", response_model=list[UniverseRow])
-def get_universe() -> list[UniverseRow]:
+def get_universe(_user: AuthUser = Depends(require_user)) -> list[UniverseRow]:
     rows: list[UniverseRow] = []
     for company in provider.list_companies():
         record = _with_local_overrides(company)
@@ -95,7 +210,7 @@ def get_universe() -> list[UniverseRow]:
 
 
 @app.get("/api/company/{ticker}", response_model=CompanyRecord)
-def get_company(ticker: str) -> CompanyRecord:
+def get_company(ticker: str, _user: AuthUser = Depends(require_user)) -> CompanyRecord:
     try:
         return _with_local_overrides(provider.get_company(ticker))
     except KeyError as exc:
@@ -103,7 +218,7 @@ def get_company(ticker: str) -> CompanyRecord:
 
 
 @app.post("/api/research/{ticker}", response_model=CompanyRecord)
-def research_ticker(ticker: str) -> CompanyRecord:
+def research_ticker(ticker: str, _user: AuthUser = Depends(require_user)) -> CompanyRecord:
     normalized = ticker.strip().upper()
     if not normalized or not normalized.replace(".", "").replace("-", "").isalnum():
         raise HTTPException(status_code=400, detail="Ticker must be alphanumeric.")
@@ -114,17 +229,17 @@ def research_ticker(ticker: str) -> CompanyRecord:
 
 
 @app.post("/api/data/refresh", response_model=RefreshResult)
-def refresh_data() -> RefreshResult:
+def refresh_data(_user: AuthUser = Depends(require_user)) -> RefreshResult:
     return provider.refresh()
 
 
 @app.get("/api/theses/{ticker}", response_model=Thesis)
-def get_thesis(ticker: str) -> Thesis:
+def get_thesis(ticker: str, _user: AuthUser = Depends(require_user)) -> Thesis:
     return get_company(ticker).thesis
 
 
 @app.put("/api/theses/{ticker}", response_model=Thesis)
-def put_thesis(ticker: str, thesis: Thesis) -> Thesis:
+def put_thesis(ticker: str, thesis: Thesis, _user: AuthUser = Depends(require_user)) -> Thesis:
     if thesis.ticker.upper() != ticker.upper():
         raise HTTPException(status_code=400, detail="Ticker in path and body must match.")
     get_company(ticker)
@@ -132,12 +247,12 @@ def put_thesis(ticker: str, thesis: Thesis) -> Thesis:
 
 
 @app.get("/api/valuation/{ticker}", response_model=ScenarioValuation)
-def get_valuation(ticker: str) -> ScenarioValuation:
+def get_valuation(ticker: str, _user: AuthUser = Depends(require_user)) -> ScenarioValuation:
     return get_company(ticker).valuation
 
 
 @app.put("/api/valuation/{ticker}", response_model=ScenarioValuation)
-def put_valuation(ticker: str, valuation: ScenarioValuation) -> ScenarioValuation:
+def put_valuation(ticker: str, valuation: ScenarioValuation, _user: AuthUser = Depends(require_user)) -> ScenarioValuation:
     if valuation.ticker.upper() != ticker.upper():
         raise HTTPException(status_code=400, detail="Ticker in path and body must match.")
     get_company(ticker)
@@ -145,25 +260,25 @@ def put_valuation(ticker: str, valuation: ScenarioValuation) -> ScenarioValuatio
 
 
 @app.get("/api/saved", response_model=list[SavedIdea])
-def list_saved_ideas() -> list[SavedIdea]:
+def list_saved_ideas(_user: AuthUser = Depends(require_user)) -> list[SavedIdea]:
     return repository.list_saved_ideas()
 
 
 @app.put("/api/saved/{ticker}", response_model=SavedIdea)
-def put_saved_idea(ticker: str, idea: SavedIdea) -> SavedIdea:
+def put_saved_idea(ticker: str, idea: SavedIdea, _user: AuthUser = Depends(require_user)) -> SavedIdea:
     if idea.ticker.upper() != ticker.upper():
         raise HTTPException(status_code=400, detail="Ticker in path and body must match.")
     return repository.save_saved_idea(idea)
 
 
 @app.delete("/api/saved/{ticker}")
-def delete_saved_idea(ticker: str) -> dict[str, bool]:
+def delete_saved_idea(ticker: str, _user: AuthUser = Depends(require_user)) -> dict[str, bool]:
     repository.delete_saved_idea(ticker)
     return {"deleted": True}
 
 
 @app.post("/api/export/{ticker}/substack", response_model=MarkdownExport)
-def export_substack(ticker: str) -> MarkdownExport:
+def export_substack(ticker: str, _user: AuthUser = Depends(require_user)) -> MarkdownExport:
     return build_substack_markdown(get_company(ticker))
 
 
