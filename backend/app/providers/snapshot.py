@@ -7,6 +7,7 @@ from backend.app.models import (
     Catalyst,
     CompanyProfile,
     CompanyRecord,
+    DataProvenance,
     FinancialPoint,
     FinancialSeries,
     MarketSnapshot,
@@ -158,6 +159,16 @@ class SnapshotProvider(DataProvider):
             peers=peers,
             news=news,
             recommendation=recommendation,
+            provenance=DataProvenance(
+                quote="Snapshot fixture",
+                market_cap="Snapshot fixture",
+                financials="Snapshot fixture",
+                valuation="Snapshot scenario scaffold",
+                news="Snapshot demo news",
+                thesis="Snapshot thesis scaffold",
+                recommendation="Generated from snapshot fixture values",
+                warnings=["Demo fixture values are synthetic/sanitized and should not be treated as live market data."],
+            ),
         )
 
     def _build_recommendation(self, item: dict, implied_return_pct: float) -> Recommendation:
@@ -194,7 +205,7 @@ class SnapshotProvider(DataProvider):
 
         return [
             NewsItem(
-                title=f"{item['ticker']} AI infrastructure demand monitor",
+                title=f"{item['ticker']} market demand monitor",
                 source="Demo research note",
                 published_at=item["updated_date"],
                 sentiment="Positive" if item["stance"] == "Buy" else "Neutral",

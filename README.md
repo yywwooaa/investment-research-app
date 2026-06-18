@@ -1,14 +1,16 @@
 # Variant Research Workbench
 
-An interview-ready public equities research app for buyside-style AI infrastructure coverage. The workbench combines a coverage universe, company tear sheets, peer comps, scenario valuation, thesis notes, catalysts/risks, and Substack-ready Markdown exports.
+An interview-ready public equities research app for buyside-style stock research. The workbench combines ticker search, saved watchlists, company tear sheets, peer comps, scenario valuation, thesis notes, catalysts/risks, data provenance, and Substack-ready Markdown exports.
 
 The repository is designed to be public-GitHub safe. Demo fixtures are synthetic/sanitized, while local Bloomberg outputs and SQLite research edits stay under ignored `data/local/`.
 
 ## What It Shows
 
-- Coverage dashboard for `NVDA`, `AMD`, `AVGO`, `TSM`, `ASML`, `MU`, `MSFT`, `AMZN`, `GOOGL`, `META`, `VRT`, and `ETN`.
+- Starter research tape for large public equities, plus search for any ticker your configured provider can resolve.
 - Company tear sheets with market snapshot, financial trajectory, peer comps, variant view, catalysts, risks, and watch items.
-- Market-desk overview with coverage-basket breadth, top movers, recommendation mix, and a watchlist heatmap.
+- Saved-watchlist dashboard with breadth, top movers, recommendation mix, and a personalized heatmap.
+- Trending tape ranked by available news count, recent movement, and tracked/saved-name traction.
+- Data provenance panel showing which fields are Yahoo/Bloomberg-backed, fixture-backed, scaffolded, or unavailable.
 - Bull/base/bear scenario valuation workspace with editable assumptions and implied return.
 - Thesis editor for stance, horizon, one-liner, variant view, evidence, risks, and watch items.
 - Saved idea board for bookmarking tickers, setting priority, and writing the reason you want to revisit the name.
@@ -16,8 +18,8 @@ The repository is designed to be public-GitHub safe. Demo fixtures are synthetic
 - Owner admin panel for viewing registered users with a private Render-only admin key.
 - Structured Substack Markdown export generated from your own thesis fields, not an LLM.
 - Bloomberg Desktop API adapter that can refresh configured reference fields locally when `blpapi` and Terminal API are available.
-- Buy/hold/sell recommendation cards with confidence, rationale, source status, positive drivers, negative drivers, and recent-news context.
-- Ticker search that opens a covered company or a transparent research-intake state when no sanctioned data is connected.
+- Buy/hold/sell/under-review recommendation cards with confidence, rationale, source status, positive drivers, negative drivers, and recent-news context.
+- Ticker search that opens a tracked company, a provider-backed ticker, or a transparent research-intake state when no sanctioned data is connected.
 
 ## Stack
 
@@ -89,11 +91,12 @@ Bloomberg setup reference: [Bloomberg API Library](https://www.bloomberg.com/pro
 
 The app currently separates the research workflow from the data source:
 
-- Seeded coverage uses synthetic/sanitized fixture values and demo news summaries.
+- The starter tape can include synthetic/sanitized fixture values and demo news summaries.
 - Yahoo mode uses `yfinance` for free/public market data and news where available. `yfinance` is unofficial, not affiliated with Yahoo, and should be treated as research/educational/personal-use data rather than institutional-grade data.
 - Bloomberg mode can refresh financial and market reference fields locally through BLPAPI.
 - Current-news automation still needs a licensed source: Bloomberg News/Terminal entitlements, a market-data API with news, RSS feeds you are allowed to use, or manually approved imports.
-- The recommendation card is a research signal for interview/demo workflows, not investment advice.
+- Data provenance is field-level: if Yahoo/Bloomberg does not supply a core field, the app flags fixture/scaffold fallback instead of presenting it as current market data.
+- The recommendation card is a research signal for interview/demo workflows, not investment advice. It moves to `Under Review` when core source gaps or data-quality warnings are detected.
 
 ## API
 
@@ -105,6 +108,8 @@ The app currently separates the research workflow from the data source:
 - `GET /api/admin/users`
 - `GET /api/search?q={query}`
 - `GET /api/universe`
+- `GET /api/watchlist`
+- `GET /api/trending`
 - `GET /api/company/{ticker}`
 - `POST /api/data/refresh`
 - `POST /api/research/{ticker}`

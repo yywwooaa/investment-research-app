@@ -7,6 +7,7 @@ from typing import Any
 from backend.app.models import (
     CompanyProfile,
     CompanyRecord,
+    DataProvenance,
     FinancialPoint,
     FinancialSeries,
     MarketSnapshot,
@@ -67,7 +68,7 @@ class YahooFinanceProvider(DataProvider):
                     }
                 )
         self._records = records
-        message = "Yahoo Finance refresh completed for seeded universe."
+        message = "Yahoo Finance refresh completed for tracked starter list."
         if errors:
             message += f" Snapshot fallback used for {len(errors)} ticker(s)."
         return RefreshResult(
@@ -95,7 +96,8 @@ class YahooFinanceProvider(DataProvider):
         peers = base.peers if base else []
         valuation = self._build_valuation(ticker, market, info, financials, base)
         thesis = self._build_thesis(ticker, profile, market, valuation, news, base)
-        recommendation = self._build_recommendation(ticker, market, valuation, news, thesis)
+        provenance = self._build_provenance(ticker, info, fast_info, history, base, news, market, valuation)
+        recommendation = self._build_recommendation(ticker, market, valuation, news, thesis, provenance)
 
         return CompanyRecord(
             profile=profile,
@@ -106,6 +108,7 @@ class YahooFinanceProvider(DataProvider):
             peers=peers,
             news=news,
             recommendation=recommendation,
+            provenance=provenance,
         )
 
     @staticmethod
@@ -153,8 +156,25 @@ class YahooFinanceProvider(DataProvider):
                 return number
         return None
 
+    def _quote_value(self, info: dict[str, Any], fast_info: dict[str, Any]) -> float | None:
+        return self._first_num(
+            info.get("regularMarketPrice"),
+            info.get("currentPrice"),
+            info.get("lastPrice"),
+            fast_info.get("last_price"),
+            fast_info.get("lastPrice"),
+        )
+
+    def _previous_close_value(self, info: dict[str, Any], fast_info: dict[str, Any]) -> float | None:
+        return self._first_num(
+            info.get("regularMarketPreviousClose"),
+            info.get("previousClose"),
+            fast_info.get("previous_close"),
+            fast_info.get("previousClose"),
+        )
+
     def _market_cap(self, info: dict[str, Any], fast_info: dict[str, Any], price: float | None = None) -> float | None:
-        market_cap = self._first_num(info.get("marketCap"), fast_info.get("market_cap"))
+        market_cap = self._first_num(info.get("marketCap"), info.get("market_cap"), fast_info.get("market_cap"), fast_info.get("marketCap"))
         if market_cap:
             return market_cap
 
@@ -162,6 +182,8 @@ class YahooFinanceProvider(DataProvider):
             info.get("sharesOutstanding"),
             info.get("impliedSharesOutstanding"),
             fast_info.get("shares"),
+            fast_info.get("shares_outstanding"),
+            fast_info.get("sharesOutstanding"),
         )
         if shares and price:
             return shares * price
@@ -174,7 +196,7 @@ class YahooFinanceProvider(DataProvider):
         fast_info: dict[str, Any],
         base: CompanyRecord | None,
     ) -> CompanyProfile:
-        price = self._first_num(info.get("regularMarketPrice"), info.get("currentPrice"), fast_info.get("last_price"))
+        price = self._quote_value(info, fast_info)
         market_cap = self._market_cap(info, fast_info, price)
         return CompanyProfile(
             ticker=ticker,
@@ -193,12 +215,8 @@ class YahooFinanceProvider(DataProvider):
         history: Any,
         base: CompanyRecord | None,
     ) -> MarketSnapshot:
-        price = self._first_num(info.get("regularMarketPrice"), info.get("currentPrice"), fast_info.get("last_price"))
-        previous_close = self._first_num(
-            info.get("regularMarketPreviousClose"),
-            info.get("previousClose"),
-            fast_info.get("previous_close"),
-        )
+        price = self._quote_value(info, fast_info)
+        previous_close = self._previous_close_value(info, fast_info)
         if price is None and history is not None:
             price = self._num(history["Close"].iloc[-1], None)
         if previous_close is None and history is not None and len(history) > 1:
@@ -357,7 +375,7 @@ class YahooFinanceProvider(DataProvider):
         if any(term in text for term in {"earnings", "revenue", "margin", "guidance", "forecast"}):
             return "Likely relevant to near-term estimates, revisions, or margin assumptions."
         if any(term in text for term in {"ai", "chip", "datacenter", "data center", "cloud", "semiconductor"}):
-            return "Potential read-through for AI infrastructure demand and competitive positioning."
+            return "Potential read-through for sector demand, capex, or competitive positioning."
         if any(term in text for term in {"deal", "partnership", "customer", "contract", "order"}):
             return "Could affect revenue visibility, customer adoption, or backlog confidence."
         if any(term in text for term in {"regulation", "export", "china", "antitrust", "lawsuit", "probe"}):
@@ -456,6 +474,86 @@ class YahooFinanceProvider(DataProvider):
             }
         )
 
+    def _build_provenance(
+        self,
+        ticker: str,
+        info: dict[str, Any],
+        fast_info: dict[str, Any],
+        history: Any,
+        base: CompanyRecord | None,
+        news: list[NewsItem],
+        market: MarketSnapshot,
+        valuation: ScenarioValuation,
+    ) -> DataProvenance:
+        quote_source = "Unavailable"
+        if self._first_num(info.get("regularMarketPrice"), info.get("currentPrice"), info.get("lastPrice")) is not None:
+            quote_source = "Yahoo Finance quote field"
+        elif self._first_num(fast_info.get("last_price"), fast_info.get("lastPrice")) is not None:
+            quote_source = "Yahoo Finance fast quote"
+        elif history is not None:
+            quote_source = "Yahoo Finance latest historical close"
+        elif base:
+            quote_source = "Fixture fallback"
+
+        market_cap_source = "Unavailable"
+        if self._first_num(info.get("marketCap"), info.get("market_cap")) is not None:
+            market_cap_source = "Yahoo Finance marketCap"
+        elif self._first_num(fast_info.get("market_cap"), fast_info.get("marketCap")) is not None:
+            market_cap_source = "Yahoo Finance fast market cap"
+        elif self._first_num(
+            info.get("sharesOutstanding"),
+            info.get("impliedSharesOutstanding"),
+            fast_info.get("shares"),
+            fast_info.get("shares_outstanding"),
+            fast_info.get("sharesOutstanding"),
+        ) is not None and self._quote_value(info, fast_info) is not None:
+            market_cap_source = "Yahoo shares outstanding x quote"
+        elif base:
+            market_cap_source = "Fixture fallback"
+
+        financials_source = "Yahoo Finance TTM fundamentals" if self._num(info.get("totalRevenue"), None) else "Unavailable"
+        if financials_source == "Unavailable" and base:
+            financials_source = "Fixture financial series"
+
+        if self._num(info.get("targetMeanPrice"), None):
+            valuation_source = "Yahoo analyst target mean; scenarios generated by app"
+        elif base:
+            valuation_source = "Fixture scenario scaffold"
+        else:
+            valuation_source = "App-generated scenario scaffold"
+
+        has_real_news = bool(news) and not news[0].title.startswith("No ticker-specific Yahoo Finance news returned")
+        news_source = "Yahoo Finance ticker news" if has_real_news else "No current Yahoo ticker news returned"
+        thesis_source = "Fixture thesis scaffold, user-editable" if base else "App intake thesis scaffold, user-editable"
+
+        warnings: list[str] = [
+            "Yahoo/yfinance is a free unofficial source; validate figures against filings or a licensed feed before publishing."
+        ]
+        if "Fixture" in market_cap_source:
+            warnings.append(f"{ticker} market cap is using a fixture fallback, not the current Yahoo market cap.")
+        if "Fixture" in financials_source:
+            warnings.append(f"{ticker} financial series is using fixture data where Yahoo fundamentals were unavailable.")
+        if "Fixture" in valuation_source or "scaffold" in valuation_source.lower():
+            warnings.append(f"{ticker} valuation/recommendation relies on scaffold assumptions until you edit the cases.")
+        if not has_real_news:
+            warnings.append("Yahoo did not return clearly ticker-specific recent news for this request.")
+        if abs(market.relative_strength_pct) > 500 or abs(market.ytd_change_pct) > 500:
+            warnings.append("Extreme historical move detected; validate splits, corporate actions, and quote source.")
+        if valuation.base.implied_price == 0:
+            warnings.append("No usable valuation target is loaded yet.")
+
+        return DataProvenance(
+            quote=quote_source,
+            market_cap=market_cap_source,
+            financials=financials_source,
+            valuation=valuation_source,
+            news=news_source,
+            thesis=thesis_source,
+            recommendation="Rule-based signal from available quote, momentum, news, and scenario fields",
+            warnings=warnings,
+            refreshed_date=date.today(),
+        )
+
     def _build_recommendation(
         self,
         ticker: str,
@@ -463,9 +561,17 @@ class YahooFinanceProvider(DataProvider):
         valuation: ScenarioValuation,
         news: list[NewsItem],
         thesis: Thesis,
+        provenance: DataProvenance | None = None,
     ) -> Recommendation:
         implied_return = valuation.base.implied_return_pct
         data_quality_warning = abs(market.relative_strength_pct) > 500 or abs(market.ytd_change_pct) > 500
+        fallback_gap = False
+        if provenance is not None:
+            fallback_gap = any(
+                marker in source.lower()
+                for source in [provenance.quote, provenance.market_cap, provenance.financials, provenance.valuation]
+                for marker in ["fixture", "unavailable", "scaffold"]
+            )
         bounded_relative_strength = min(100, max(-100, market.relative_strength_pct))
         score = min(100, max(0, 50 + implied_return * 1.1 + bounded_relative_strength * 0.05))
         if implied_return >= 15:
@@ -477,29 +583,45 @@ class YahooFinanceProvider(DataProvider):
         confidence = "Medium" if abs(implied_return) >= 10 and market.price > 0 else "Low"
         if data_quality_warning:
             confidence = "Low"
+        if fallback_gap or data_quality_warning:
+            rating = "Under Review"
+            confidence = "Low"
+            score = min(score, 55)
         positives = thesis.evidence[:3] or [f"Base-case implied return is {implied_return:.1f}%."]
         negatives = thesis.risks[:3] or ["Free data source; validate against filings and company materials before publishing."]
+        if fallback_gap:
+            negatives = [
+                "Some core fields use fixture/scaffold fallback; validate live market cap, financials, and valuation before assigning a rating.",
+                *negatives,
+            ]
         if data_quality_warning:
             negatives = [
                 "Extreme Yahoo historical move detected; validate splits, corporate actions, and quote source before using momentum.",
                 *negatives,
             ]
-        source_status = (
-            "Yahoo Finance via yfinance: live/public quote, market, and news fields when available; "
-            "fixture thesis/valuation scaffolding fills gaps"
-        )
+        source_status = "Yahoo/yfinance where available; fallback/scaffold fields are flagged in Data Provenance"
+        if fallback_gap:
+            source_status += "; data-quality warning: core fields need validation"
         if data_quality_warning:
             source_status += "; data-quality warning: extreme historical move requires validation"
+        if rating == "Under Review":
+            rationale = (
+                "Under Review because the app detected source gaps or data-quality warnings. "
+                f"Current scaffold shows base-case implied return of {implied_return:.1f}%, "
+                f"relative strength of {market.relative_strength_pct:.1f}%, and {len(news)} recent news item(s)."
+            )
+        else:
+            rationale = (
+                f"{rating} based on Yahoo Finance market data, base-case implied return of "
+                f"{implied_return:.1f}%, relative strength of {market.relative_strength_pct:.1f}%, "
+                f"and {len(news)} recent news item(s)."
+            )
         return Recommendation(
             ticker=ticker,
             rating=rating,
             confidence=confidence,
             score=round(score, 1),
-            rationale=(
-                f"{rating} based on Yahoo Finance market data, base-case implied return of "
-                f"{implied_return:.1f}%, relative strength of {market.relative_strength_pct:.1f}%, "
-                f"and {len(news)} recent news item(s)."
-            ),
+            rationale=rationale,
             positives=positives,
             negatives=negatives,
             source_status=source_status,

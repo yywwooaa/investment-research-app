@@ -28,6 +28,7 @@ from backend.app.models import (
     SigninRequest,
     SignupRequest,
     Thesis,
+    TrendingRow,
     UniverseRow,
 )
 from backend.app.providers.bloomberg import BloombergConfig, BloombergProvider
@@ -244,6 +245,65 @@ def _dedupe_suggestions(suggestions: list[SearchSuggestion], limit: int) -> list
     return deduped
 
 
+def _record_for_research_view(ticker: str) -> CompanyRecord:
+    normalized = ticker.strip().upper()
+    try:
+        return _with_local_overrides(provider.get_company(normalized))
+    except KeyError:
+        return build_research_intake_record(normalized)
+
+
+def _to_universe_row(record: CompanyRecord) -> UniverseRow:
+    return UniverseRow(
+        ticker=record.profile.ticker,
+        name=record.profile.name,
+        sector=record.profile.sector,
+        industry=record.profile.industry,
+        price=record.market.price,
+        daily_change_pct=record.market.daily_change_pct,
+        ytd_change_pct=record.market.ytd_change_pct,
+        relative_strength_pct=record.market.relative_strength_pct,
+        ev_sales_ntm=record.market.ev_sales_ntm,
+        ev_ebitda_ntm=record.market.ev_ebitda_ntm,
+        pe_ntm=record.market.pe_ntm,
+        fcf_yield_pct=record.market.fcf_yield_pct,
+        stance=record.thesis.stance,
+        recommendation=record.recommendation.rating,
+        confidence=record.recommendation.confidence,
+        source_status=record.recommendation.source_status,
+        horizon=record.thesis.horizon,
+        catalyst_count=len(record.thesis.catalysts),
+        news_count=len(record.news),
+        thesis_updated=record.thesis.updated_date,
+    )
+
+
+def _to_trending_row(record: CompanyRecord, source_label: str) -> TrendingRow:
+    news_count = len(record.news)
+    move_score = abs(record.market.daily_change_pct) * 4
+    news_score = news_count * 8
+    momentum_score = min(abs(record.market.relative_strength_pct), 100) * 0.2
+    score = round(move_score + news_score + momentum_score, 1)
+    reason_parts: list[str] = []
+    if news_count:
+        reason_parts.append(f"{news_count} recent news item(s)")
+    if record.market.daily_change_pct:
+        reason_parts.append(f"{record.market.daily_change_pct:+.1f}% today")
+    if record.market.relative_strength_pct:
+        reason_parts.append(f"{record.market.relative_strength_pct:+.1f}% one-year move")
+    reason = " / ".join(reason_parts) if reason_parts else "Research intake awaiting source data"
+    return TrendingRow(
+        ticker=record.profile.ticker,
+        name=record.profile.name,
+        price=record.market.price,
+        daily_change_pct=record.market.daily_change_pct,
+        news_count=news_count,
+        traction_score=score,
+        reason=f"{source_label}: {reason}",
+        source_status=record.recommendation.source_status,
+    )
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     frontend_status = "served" if _frontend_dist_available() else "api-only"
@@ -321,34 +381,28 @@ def reset_password(payload: ResetPasswordRequest) -> MessageResponse:
 
 @app.get("/api/universe", response_model=list[UniverseRow])
 def get_universe(_user: AuthUser = Depends(require_user)) -> list[UniverseRow]:
-    rows: list[UniverseRow] = []
+    return [_to_universe_row(_with_local_overrides(company)) for company in provider.list_companies()]
+
+
+@app.get("/api/watchlist", response_model=list[UniverseRow])
+def get_watchlist(_user: AuthUser = Depends(require_user)) -> list[UniverseRow]:
+    return [_to_universe_row(_record_for_research_view(idea.ticker)) for idea in repository.list_saved_ideas()]
+
+
+@app.get("/api/trending", response_model=list[TrendingRow])
+def get_trending(
+    limit: int = Query(default=12, ge=1, le=24),
+    _user: AuthUser = Depends(require_user),
+) -> list[TrendingRow]:
+    records: dict[str, tuple[CompanyRecord, str]] = {}
     for company in provider.list_companies():
         record = _with_local_overrides(company)
-        rows.append(
-            UniverseRow(
-                ticker=record.profile.ticker,
-                name=record.profile.name,
-                sector=record.profile.sector,
-                industry=record.profile.industry,
-                price=record.market.price,
-                daily_change_pct=record.market.daily_change_pct,
-                ytd_change_pct=record.market.ytd_change_pct,
-                relative_strength_pct=record.market.relative_strength_pct,
-                ev_sales_ntm=record.market.ev_sales_ntm,
-                ev_ebitda_ntm=record.market.ev_ebitda_ntm,
-                pe_ntm=record.market.pe_ntm,
-                fcf_yield_pct=record.market.fcf_yield_pct,
-                stance=record.thesis.stance,
-                recommendation=record.recommendation.rating,
-                confidence=record.recommendation.confidence,
-                source_status=record.recommendation.source_status,
-                horizon=record.thesis.horizon,
-                catalyst_count=len(record.thesis.catalysts),
-                news_count=len(record.news),
-                thesis_updated=record.thesis.updated_date,
-            )
-        )
-    return rows
+        records[record.profile.ticker] = (record, "Tracked market tape")
+    for idea in repository.list_saved_ideas():
+        record = _record_for_research_view(idea.ticker)
+        records[record.profile.ticker] = (record, "Saved idea")
+    rows = [_to_trending_row(record, source_label) for record, source_label in records.values()]
+    return sorted(rows, key=lambda row: (-row.traction_score, row.ticker))[:limit]
 
 
 @app.get("/api/search", response_model=list[SearchSuggestion])
@@ -381,10 +435,7 @@ def research_ticker(ticker: str, _user: AuthUser = Depends(require_user)) -> Com
     normalized = ticker.strip().upper()
     if not normalized or not normalized.replace(".", "").replace("-", "").isalnum():
         raise HTTPException(status_code=400, detail="Ticker must be alphanumeric.")
-    try:
-        return _with_local_overrides(provider.get_company(normalized))
-    except KeyError:
-        return build_research_intake_record(normalized)
+    return _record_for_research_view(normalized)
 
 
 @app.post("/api/data/refresh", response_model=RefreshResult)

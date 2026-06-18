@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.app.models import CompanyRecord, RefreshResult
+from backend.app.models import CompanyRecord, DataProvenance, RefreshResult
 from backend.app.providers.base import DataProvider
 from backend.app.providers.snapshot import SnapshotProvider
 
@@ -178,7 +178,20 @@ class BloombergProvider(DataProvider):
                 "fcf_yield_pct": field_data.get("FREE_CASH_FLOW_YIELD", market.fcf_yield_pct),
             }
         )
-        return record.model_copy(update={"profile": updated_profile, "market": updated_market})
+        updated_provenance = DataProvenance(
+            quote="Bloomberg Desktop API reference field PX_LAST" if "PX_LAST" in field_data else record.provenance.quote,
+            market_cap="Bloomberg Desktop API reference field CUR_MKT_CAP" if "CUR_MKT_CAP" in field_data else record.provenance.market_cap,
+            financials="Bloomberg reference fields where available; fixture financial series may still fill gaps",
+            valuation="Fixture/user scenario scaffold; edit assumptions before publishing",
+            news="No Bloomberg News ingestion in this app flow yet",
+            thesis="Fixture or user-authored research",
+            recommendation="Generated from available Bloomberg/reference and scenario fields",
+            warnings=[
+                "Bloomberg reference fields refreshed market data only; thesis, news, and valuation text may still be scaffolded.",
+                *record.provenance.warnings,
+            ],
+        )
+        return record.model_copy(update={"profile": updated_profile, "market": updated_market, "provenance": updated_provenance})
 
     def _write_local_snapshot(self, field_data: dict[str, dict[str, float]]) -> None:
         if self.config.local_snapshot_path is None:

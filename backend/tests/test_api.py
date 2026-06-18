@@ -48,6 +48,45 @@ def test_company_record_shape(tmp_path):
     assert payload["peers"]
     assert payload["recommendation"]["rating"] == "Buy"
     assert payload["news"]
+    assert payload["provenance"]["market_cap"] == "Snapshot fixture"
+    assert payload["provenance"]["warnings"]
+
+
+def test_watchlist_uses_saved_tickers_only(tmp_path):
+    use_snapshot_provider(tmp_path)
+    client = TestClient(main_module.app)
+    headers = auth_headers(client)
+    idea = {
+        "ticker": "AMD",
+        "note": "Follow margin reset.",
+        "priority": "Medium",
+        "created_at": "2026-06-18",
+        "updated_date": "2026-06-18",
+    }
+
+    empty_response = client.get("/api/watchlist", headers=headers)
+    save_response = client.put("/api/saved/AMD", json=idea, headers=headers)
+    watchlist_response = client.get("/api/watchlist", headers=headers)
+
+    assert empty_response.status_code == 200
+    assert empty_response.json() == []
+    assert save_response.status_code == 200
+    assert watchlist_response.status_code == 200
+    assert [row["ticker"] for row in watchlist_response.json()] == ["AMD"]
+
+
+def test_trending_returns_ranked_tracked_tape(tmp_path):
+    use_snapshot_provider(tmp_path)
+    client = TestClient(main_module.app)
+    headers = auth_headers(client)
+
+    response = client.get("/api/trending?limit=5", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 5
+    assert {"ticker", "traction_score", "reason", "news_count"} <= payload[0].keys()
+    assert payload[0]["traction_score"] >= payload[-1]["traction_score"]
 
 
 def test_search_suggestions_resolve_names_and_partials(tmp_path):
@@ -103,7 +142,7 @@ def test_saved_idea_save_list_and_delete(tmp_path):
     headers = auth_headers(client)
     idea = {
         "ticker": "NVDA",
-        "note": "Own the AI infrastructure earnings revision cycle.",
+        "note": "Own the earnings revision cycle.",
         "priority": "High",
         "created_at": "2026-06-16",
         "updated_date": "2026-06-16",

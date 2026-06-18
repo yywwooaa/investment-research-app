@@ -37,8 +37,25 @@ def test_yahoo_recommendation_flags_extreme_historical_moves():
 
     recommendation = provider._build_recommendation("SNDK", market, valuation, [], base.thesis)
 
-    assert recommendation.rating == "Sell"
+    assert recommendation.rating == "Under Review"
     assert recommendation.confidence == "Low"
     assert recommendation.score < 50
     assert "data-quality warning" in recommendation.source_status
     assert "Extreme Yahoo historical move" in recommendation.negatives[0]
+
+
+def test_yahoo_recommendation_goes_under_review_with_fixture_gap():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+    base = fallback.get_company("NVDA")
+    info = {"regularMarketPrice": 206.52, "previousClose": 207.41}
+    fast_info = {}
+    news = base.news
+
+    provenance = provider._build_provenance("NVDA", info, fast_info, None, base, news, base.market, base.valuation)
+    recommendation = provider._build_recommendation("NVDA", base.market, base.valuation, news, base.thesis, provenance)
+
+    assert provenance.market_cap == "Fixture fallback"
+    assert recommendation.rating == "Under Review"
+    assert recommendation.confidence == "Low"
+    assert "core fields need validation" in recommendation.source_status

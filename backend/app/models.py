@@ -74,6 +74,18 @@ class Recommendation(BaseModel):
     updated_date: date = Field(default_factory=date.today)
 
 
+class DataProvenance(BaseModel):
+    quote: str = "Fixture snapshot"
+    market_cap: str = "Fixture snapshot"
+    financials: str = "Fixture financial series"
+    valuation: str = "Fixture scenario scaffold"
+    news: str = "Fixture/demo news"
+    thesis: str = "Fixture or user-authored research"
+    recommendation: str = "Generated from available fields"
+    warnings: list[str] = Field(default_factory=list)
+    refreshed_date: date = Field(default_factory=date.today)
+
+
 class Thesis(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -130,6 +142,7 @@ class CompanyRecord(BaseModel):
     peers: list[PeerMetric]
     news: list[NewsItem] = Field(default_factory=list)
     recommendation: Recommendation
+    provenance: DataProvenance = Field(default_factory=DataProvenance)
 
 
 class UniverseRow(BaseModel):
@@ -153,6 +166,17 @@ class UniverseRow(BaseModel):
     catalyst_count: int
     news_count: int
     thesis_updated: date
+
+
+class TrendingRow(BaseModel):
+    ticker: str
+    name: str
+    price: float
+    daily_change_pct: float
+    news_count: int
+    traction_score: float
+    reason: str
+    source_status: str
 
 
 class SavedIdea(BaseModel):

@@ -69,6 +69,18 @@ export interface Recommendation {
   updated_date: string;
 }
 
+export interface DataProvenance {
+  quote: string;
+  market_cap: string;
+  financials: string;
+  valuation: string;
+  news: string;
+  thesis: string;
+  recommendation: string;
+  warnings: string[];
+  refreshed_date: string;
+}
+
 export interface Thesis {
   ticker: string;
   stance: Stance;
@@ -123,6 +135,7 @@ export interface CompanyRecord {
   peers: PeerMetric[];
   news: NewsItem[];
   recommendation: Recommendation;
+  provenance: DataProvenance;
 }
 
 export interface UniverseRow {
@@ -146,6 +159,17 @@ export interface UniverseRow {
   catalyst_count: number;
   news_count: number;
   thesis_updated: string;
+}
+
+export interface TrendingRow {
+  ticker: string;
+  name: string;
+  price: number;
+  daily_change_pct: number;
+  news_count: number;
+  traction_score: number;
+  reason: string;
+  source_status: string;
 }
 
 export interface SavedIdea {

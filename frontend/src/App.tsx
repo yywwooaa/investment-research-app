@@ -50,6 +50,7 @@ import type {
   ScenarioValuation,
   Stance,
   Thesis,
+  TrendingRow,
   UniverseRow
 } from "./types";
 
@@ -133,6 +134,8 @@ export default function App() {
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [adminStatus, setAdminStatus] = useState("");
   const [universe, setUniverse] = useState<UniverseRow[]>([]);
+  const [watchlistRows, setWatchlistRows] = useState<UniverseRow[]>([]);
+  const [trendingRows, setTrendingRows] = useState<TrendingRow[]>([]);
   const [selectedTicker, setSelectedTicker] = useState("NVDA");
   const [company, setCompany] = useState<CompanyRecord | null>(null);
   const [thesisDraft, setThesisDraft] = useState<Thesis | null>(null);
@@ -165,6 +168,8 @@ export default function App() {
     setAuthToken(null);
     setAuthUser(null);
     setUniverse([]);
+    setWatchlistRows([]);
+    setTrendingRows([]);
     setCompany(null);
     setSavedIdeas([]);
     setAdminOpen(false);
@@ -223,6 +228,16 @@ export default function App() {
     setSavedIdeas(ideas);
   }
 
+  async function loadWatchlist() {
+    const rows = await api.watchlist();
+    setWatchlistRows(rows);
+  }
+
+  async function loadTrending() {
+    const rows = await api.trending();
+    setTrendingRows(rows);
+  }
+
   async function loadCompany(ticker: string) {
     setIsBusy(true);
     try {
@@ -255,6 +270,8 @@ export default function App() {
       setAuthToken(null);
       setAuthUser(null);
       setUniverse([]);
+      setWatchlistRows([]);
+      setTrendingRows([]);
       setCompany(null);
       setStatus("Session expired. Sign in again.");
     };
@@ -264,8 +281,8 @@ export default function App() {
 
   useEffect(() => {
     if (!authToken || !authUser) return;
-    Promise.all([loadUniverse(), loadSavedIdeas()])
-      .then(() => setStatus("Snapshot universe ready"))
+    Promise.all([loadUniverse(), loadSavedIdeas(), loadWatchlist(), loadTrending()])
+      .then(() => setStatus("Research workspace ready"))
       .catch((error) => setStatus(error instanceof Error ? error.message : "Unable to load workspace"));
   }, [authToken, authUser]);
 
@@ -316,7 +333,7 @@ export default function App() {
   );
 
   const marketDesk = useMemo(() => {
-    const rows = [...universe];
+    const rows = [...watchlistRows];
     const averageDaily = rows.length ? rows.reduce((sum, row) => sum + row.daily_change_pct, 0) / rows.length : 0;
     const averageYtd = rows.length ? rows.reduce((sum, row) => sum + row.ytd_change_pct, 0) / rows.length : 0;
     const positiveCount = rows.filter((row) => row.daily_change_pct >= 0).length;
@@ -327,12 +344,13 @@ export default function App() {
       averageDaily,
       averageYtd,
       breadth: rows.length ? (positiveCount / rows.length) * 100 : 0,
+      savedCount: rows.length,
       topGainers: [...rows].sort((a, b) => b.daily_change_pct - a.daily_change_pct).slice(0, 3),
       topLosers: [...rows].sort((a, b) => a.daily_change_pct - b.daily_change_pct).slice(0, 3),
       recommendationMix: { buys, holds, sells },
-      heatmap: [...rows].sort((a, b) => b.relative_strength_pct - a.relative_strength_pct)
+      watchlist: [...rows].sort((a, b) => b.relative_strength_pct - a.relative_strength_pct)
     };
-  }, [universe]);
+  }, [watchlistRows]);
 
   const selectedScenario = valuationDraft ? valuationDraft[valuationDraft.selected_case] : null;
 
@@ -341,6 +359,8 @@ export default function App() {
     try {
       const result = await api.refresh();
       await loadUniverse();
+      await loadWatchlist();
+      await loadTrending();
       await loadCompany(selectedTicker);
       setStatus(result.message);
     } catch (error) {
@@ -431,6 +451,8 @@ export default function App() {
         updated_date: today()
       });
       setSavedIdeas((current) => [saved, ...current.filter((idea) => idea.ticker !== saved.ticker)]);
+      await loadWatchlist();
+      await loadTrending();
       setStatus(`${saved.ticker} saved to idea board`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to save idea");
@@ -445,6 +467,8 @@ export default function App() {
     try {
       await api.deleteIdea(ticker);
       setSavedIdeas((current) => current.filter((idea) => idea.ticker !== ticker));
+      await loadWatchlist();
+      await loadTrending();
       setStatus(`${ticker} removed from saved ideas`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to remove saved idea");
@@ -514,13 +538,13 @@ export default function App() {
     <>
     <div className="app-shell">
       <aside className="coverage-rail">
-        <div className="brand-block">
-          <div className="brand-mark">VR</div>
-          <div>
-            <h1>Variant Research</h1>
-            <p>AI infrastructure coverage</p>
+          <div className="brand-block">
+            <div className="brand-mark">VR</div>
+            <div>
+              <h1>Variant Research</h1>
+              <p>General equities workbench</p>
+            </div>
           </div>
-        </div>
 
         <TickerSearch
           surface="rail"
@@ -535,7 +559,7 @@ export default function App() {
           onSelect={(suggestion) => void selectSuggestion(suggestion)}
           isBusy={isBusy}
           placeholder="Search name or ticker"
-          inputLabel="Search universe"
+          inputLabel="Search stocks"
           buttonLabel="Analyze"
           buttonIconSize={15}
         />
@@ -547,7 +571,11 @@ export default function App() {
           onRemove={(ticker) => void removeCurrentIdea(ticker)}
         />
 
-        <div className="universe-list" aria-label="Coverage universe">
+        <div className="rail-section-heading compact">
+          <span>Starter tape</span>
+          <strong>{filteredUniverse.length}</strong>
+        </div>
+        <div className="universe-list" aria-label="Starter stock list">
           {filteredUniverse.map((row) => (
             <button
               key={row.ticker}
@@ -606,7 +634,7 @@ export default function App() {
               />
             </section>
 
-            <MarketDeskOverview desk={marketDesk} onOpen={(ticker) => void openTicker(ticker)} />
+            <MarketDeskOverview desk={marketDesk} trending={trendingRows} onOpen={(ticker) => void openTicker(ticker)} />
 
             <header className="company-header">
               <div>
@@ -683,6 +711,8 @@ export default function App() {
               <Metric label="FCF Yield" value={formatPct(company.market.fcf_yield_pct)} />
               <Metric label="Signal Score" value={formatNumber(company.recommendation.score, 0)} />
             </section>
+
+            <DataQualityPanel company={company} />
 
             <nav className="tab-strip" aria-label="Workbench tabs">
               {tabs.map((tab) => (
@@ -1089,73 +1119,145 @@ function SavedIdeasPanel({
 
 function MarketDeskOverview({
   desk,
+  trending,
   onOpen
 }: {
   desk: {
     averageDaily: number;
     averageYtd: number;
     breadth: number;
+    savedCount: number;
     topGainers: UniverseRow[];
     topLosers: UniverseRow[];
     recommendationMix: { buys: number; holds: number; sells: number };
-    heatmap: UniverseRow[];
+    watchlist: UniverseRow[];
   };
+  trending: TrendingRow[];
   onOpen: (ticker: string) => void;
 }) {
+  const hasSaved = desk.savedCount > 0;
   return (
     <section className="market-desk" aria-label="Market overview">
       <div className="desk-metric">
         <Gauge size={17} aria-hidden="true" />
-        <span>AI infra basket</span>
-        <strong className={signalClass(desk.averageDaily)}>{formatPct(desk.averageDaily)}</strong>
+        <span>Saved watchlist</span>
+        <strong>{desk.savedCount}</strong>
       </div>
       <div className="desk-metric">
         <Target size={17} aria-hidden="true" />
-        <span>Positive breadth</span>
-        <strong>{formatPct(desk.breadth, 0)}</strong>
+        <span>Saved breadth</span>
+        <strong>{hasSaved ? formatPct(desk.breadth, 0) : "n/a"}</strong>
       </div>
       <div className="desk-metric">
         <TrendingUp size={17} aria-hidden="true" />
-        <span>Avg YTD</span>
-        <strong className={signalClass(desk.averageYtd)}>{formatPct(desk.averageYtd)}</strong>
+        <span>Saved avg YTD</span>
+        <strong className={hasSaved ? signalClass(desk.averageYtd) : ""}>{hasSaved ? formatPct(desk.averageYtd) : "n/a"}</strong>
       </div>
       <div className="desk-metric">
         <Flame size={17} aria-hidden="true" />
-        <span>Signal mix</span>
-        <strong>{desk.recommendationMix.buys}B / {desk.recommendationMix.holds}H / {desk.recommendationMix.sells}S</strong>
+        <span>Saved signal mix</span>
+        <strong>{hasSaved ? `${desk.recommendationMix.buys}B / ${desk.recommendationMix.holds}H / ${desk.recommendationMix.sells}S` : "n/a"}</strong>
       </div>
 
       <div className="mover-panel">
-        <span>Top gainers</span>
-        {desk.topGainers.map((row) => (
-          <button key={row.ticker} type="button" onClick={() => onOpen(row.ticker)}>
-            <strong>{row.ticker}</strong>
-            <em className="positive">{formatPct(row.daily_change_pct)}</em>
-          </button>
-        ))}
+        <span>Saved gainers</span>
+        {desk.topGainers.length ? (
+          desk.topGainers.map((row) => (
+            <button key={row.ticker} type="button" onClick={() => onOpen(row.ticker)}>
+              <strong>{row.ticker}</strong>
+              <em className="positive">{formatPct(row.daily_change_pct)}</em>
+            </button>
+          ))
+        ) : (
+          <p>Save stocks to track movers.</p>
+        )}
       </div>
       <div className="mover-panel">
-        <span>Top losers</span>
-        {desk.topLosers.map((row) => (
-          <button key={row.ticker} type="button" onClick={() => onOpen(row.ticker)}>
-            <strong>{row.ticker}</strong>
-            <em className="negative">{formatPct(row.daily_change_pct)}</em>
-          </button>
-        ))}
+        <span>Saved losers</span>
+        {desk.topLosers.length ? (
+          desk.topLosers.map((row) => (
+            <button key={row.ticker} type="button" onClick={() => onOpen(row.ticker)}>
+              <strong>{row.ticker}</strong>
+              <em className="negative">{formatPct(row.daily_change_pct)}</em>
+            </button>
+          ))
+        ) : (
+          <p>Bookmark names first.</p>
+        )}
       </div>
-      <div className="heatmap-strip" aria-label="Watchlist heatmap">
-        {desk.heatmap.map((row) => (
+      <div className="heatmap-strip" aria-label="Saved watchlist heatmap">
+        {desk.watchlist.length ? (
+          desk.watchlist.map((row) => (
+            <button
+              key={row.ticker}
+              type="button"
+              className={row.relative_strength_pct >= 0 ? "heat-positive" : "heat-negative"}
+              onClick={() => onOpen(row.ticker)}
+              title={`${row.ticker} relative strength ${formatPct(row.relative_strength_pct)}`}
+            >
+              {row.ticker}
+            </button>
+          ))
+        ) : (
+          <p>No saved watchlist yet. Save a stock to make these dashboard stats personal.</p>
+        )}
+      </div>
+      <div className="trending-tape" aria-label="Trending research tape">
+        <div>
+          <span>Trending tape</span>
+          <small>Ranked by available news count, recent move, and tracked/saved traction.</small>
+        </div>
+        {trending.map((row) => (
           <button
             key={row.ticker}
             type="button"
-            className={row.relative_strength_pct >= 0 ? "heat-positive" : "heat-negative"}
+            className={row.daily_change_pct >= 0 ? "heat-positive" : "heat-negative"}
             onClick={() => onOpen(row.ticker)}
-            title={`${row.ticker} relative strength ${formatPct(row.relative_strength_pct)}`}
+            title={`${row.name}: ${row.reason}`}
           >
-            {row.ticker}
+            <strong>{row.ticker}</strong>
+            <em>{formatPct(row.daily_change_pct)}</em>
           </button>
         ))}
       </div>
+    </section>
+  );
+}
+
+function DataQualityPanel({ company }: { company: CompanyRecord }) {
+  const sourceRows = [
+    ["Quote", company.provenance.quote],
+    ["Market cap", company.provenance.market_cap],
+    ["Financials", company.provenance.financials],
+    ["Valuation", company.provenance.valuation],
+    ["News", company.provenance.news],
+    ["Thesis", company.provenance.thesis]
+  ];
+
+  return (
+    <section className="data-quality-panel" aria-label="Data provenance">
+      <div className="panel-heading">
+        <div>
+          <h3>Data Provenance</h3>
+          <span>Refreshed {company.provenance.refreshed_date}</span>
+        </div>
+        <DatabaseZap size={18} aria-hidden="true" />
+      </div>
+      <div className="source-grid">
+        {sourceRows.map(([label, value]) => (
+          <div key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
+      {company.provenance.warnings.length > 0 && (
+        <div className="warning-list">
+          {company.provenance.warnings.map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

@@ -5,6 +5,7 @@ from datetime import date
 from backend.app.models import (
     CompanyProfile,
     CompanyRecord,
+    DataProvenance,
     FinancialPoint,
     FinancialSeries,
     MarketSnapshot,
@@ -39,7 +40,7 @@ def build_research_intake_record(ticker: str) -> CompanyRecord:
             market_cap=0,
             currency="USD",
             description=(
-                "This ticker is not in the seeded coverage universe. Connect Bloomberg/news data "
+                "This ticker is not in the tracked starter list. Connect Bloomberg/news data "
                 "or add a sanctioned fixture before generating a real thesis."
             ),
         ),
@@ -106,5 +107,16 @@ def build_research_intake_record(ticker: str) -> CompanyRecord:
             negatives=["No connected financial feed", "No connected news feed"],
             source_status="Needs Bloomberg/news provider",
             updated_date=today,
+        ),
+        provenance=DataProvenance(
+            quote="Unavailable",
+            market_cap="Unavailable",
+            financials="Unavailable",
+            valuation="Unavailable until source data is connected",
+            news="Unavailable",
+            thesis="Blank research intake scaffold",
+            recommendation="Under Review because no market/news feed resolved this ticker",
+            warnings=["No trusted market, financial, or news data has been loaded for this ticker."],
+            refreshed_date=today,
         ),
     )

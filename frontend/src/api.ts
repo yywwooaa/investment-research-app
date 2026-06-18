@@ -10,6 +10,7 @@ import type {
   SearchSuggestion,
   ScenarioValuation,
   Thesis,
+  TrendingRow,
   UniverseRow
 } from "./types";
 
@@ -103,6 +104,8 @@ export const api = {
     request<MessageResponse>("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ token, password }) }),
   search: (query: string) => request<SearchSuggestion[]>(`/api/search?q=${encodeURIComponent(query)}`),
   universe: () => request<UniverseRow[]>("/api/universe"),
+  watchlist: () => request<UniverseRow[]>("/api/watchlist"),
+  trending: () => request<TrendingRow[]>("/api/trending"),
   company: (ticker: string) => request<CompanyRecord>(`/api/company/${ticker}`),
   research: (ticker: string) => request<CompanyRecord>(`/api/research/${ticker}`, { method: "POST" }),
   refresh: () => request<RefreshResult>("/api/data/refresh", { method: "POST" }),
