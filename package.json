@@ -10,6 +10,7 @@
     "start": "python -m uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}",
     "bloomberg:check": ".venv/bin/python scripts/check_bloomberg.py",
     "yahoo:check": ".venv/bin/python scripts/check_yahoo.py",
+    "mcp:yfinance": ".venv/bin/python scripts/yfinance_mcp_server.py",
     "weekly:update": ".venv/bin/python scripts/weekly_update.py",
     "test": "python -m pytest backend/tests",
     "lint": "npm --prefix frontend run lint"

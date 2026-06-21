@@ -27,6 +27,7 @@ The repository is designed to be public-GitHub safe. Demo fixtures are synthetic
 - Backend: FastAPI, Pydantic, SQLite
 - Data providers: `SnapshotProvider` for public demo fixtures, `BloombergProvider` for local Bloomberg Desktop API refreshes
 - Optional free/public provider: `YahooFinanceProvider` through `yfinance`
+- Optional local MCP server: `scripts/yfinance_mcp_server.py` exposes Yahoo/yfinance tools to MCP clients
 
 ## Setup
 
@@ -51,6 +52,19 @@ Check Yahoo Finance access:
 
 ```bash
 npm run yahoo:check
+```
+
+Install optional MCP dependencies:
+
+```bash
+source .venv/bin/activate
+pip install -r backend/requirements-mcp.txt
+```
+
+Run the yfinance MCP server locally:
+
+```bash
+npm run mcp:yfinance
 ```
 
 Use Yahoo Finance mode:
@@ -118,6 +132,27 @@ The app currently separates the research workflow from the data source:
 - `GET /api/valuation/{ticker}`
 - `PUT /api/valuation/{ticker}`
 - `POST /api/export/{ticker}/substack`
+
+## Local yfinance MCP Server
+
+The app can also expose Yahoo/yfinance through a local stdio MCP server for MCP-aware clients. This is separate from the website: the website calls FastAPI, while MCP clients call the MCP server directly.
+
+Example MCP client command:
+
+```bash
+cd "/Users/yoonchae/Documents/New project"
+.venv/bin/python scripts/yfinance_mcp_server.py
+```
+
+Tools exposed:
+
+- `get_quote(symbol)`
+- `get_profile(symbol)`
+- `get_history(symbol, period="1mo", interval="1d")`
+- `get_news(symbol, limit=10)`
+- `search_symbols(query, limit=8)`
+
+The MCP server uses Yahoo Finance through `yfinance`, which is unofficial/free data. Validate numbers before publishing or using in investment work.
 
 ## Tests
 
