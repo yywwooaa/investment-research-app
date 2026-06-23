@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import date, datetime, timezone
+from html import unescape
 from typing import Any
 
 from backend.app.models import (
@@ -306,7 +308,8 @@ class YahooFinanceProvider(DataProvider):
             title = content.get("title") or item.get("title") if isinstance(item, dict) else None
             provider = content.get("provider", {}) if isinstance(content.get("provider"), dict) else {}
             source = provider.get("displayName") or item.get("publisher", "Yahoo Finance") if isinstance(item, dict) else "Yahoo Finance"
-            summary = content.get("summary") or content.get("description") or title or f"Recent Yahoo Finance item for {ticker}."
+            title = self._clean_news_text(title)
+            summary = self._clean_news_text(content.get("summary") or content.get("description") or title or f"Recent Yahoo Finance item for {ticker}.")
             if not self._is_relevant_news(ticker, company_name, title or "", summary or ""):
                 continue
             published_raw = content.get("pubDate") or item.get("providerPublishTime") if isinstance(item, dict) else None
@@ -335,6 +338,22 @@ class YahooFinanceProvider(DataProvider):
                 impact_reason="Treat this as a data-coverage warning, not a company-specific signal.",
             )
         ]
+
+    @staticmethod
+    def _clean_news_text(value: Any) -> str:
+        text = unescape(str(value or ""))
+        text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", text)
+        text = re.sub(r"(?i)</p\s*>", ". ", text)
+        text = re.sub(r"(?i)<br\s*/?>", ". ", text)
+        text = re.sub(r"(?i)</?(body|html|div|span|article|section|p)[^>]*>", " ", text)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = unescape(text)
+        text = re.sub(r"^\s*(story|update|brief)\s*:\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*::\s*", ": ", text)
+        text = re.sub(r"\s+", " ", text).strip(" .")
+        text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+        text = re.sub(r"([.!?]){2,}", r"\1", text)
+        return f"{text}." if text and text[-1] not in ".!?" else text
 
     @staticmethod
     def _is_relevant_news(ticker: str, company_name: str, title: str, summary: str) -> bool:

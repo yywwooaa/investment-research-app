@@ -59,3 +59,17 @@ def test_yahoo_recommendation_goes_under_review_with_fixture_gap():
     assert recommendation.rating == "Under Review"
     assert recommendation.confidence == "Low"
     assert "core fields need validation" in recommendation.source_status
+
+
+def test_yahoo_news_text_strips_html_markup():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+
+    cleaned = provider._clean_news_text(
+        "<body><p>STORY: A down day on Wall Street.</p><p>Jitters over debt-funded AI spending&nbsp;hit semis.</p></body>"
+    )
+
+    assert "<" not in cleaned
+    assert "&nbsp;" not in cleaned
+    assert "STORY:" not in cleaned
+    assert cleaned == "A down day on Wall Street. Jitters over debt-funded AI spending hit semis."
