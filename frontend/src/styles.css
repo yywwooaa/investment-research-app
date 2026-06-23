@@ -177,10 +177,14 @@ button:disabled {
 }
 
 .coverage-rail {
+  position: sticky;
+  top: 0;
   display: flex;
   flex-direction: column;
   gap: 18px;
+  height: 100vh;
   min-width: 0;
+  overflow: auto;
   padding: 22px;
   color: #fbfaf6;
   background: #181713;
@@ -1004,6 +1008,105 @@ button:disabled {
   line-height: 1.55;
 }
 
+.top-recommendation-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.34fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  margin: 18px 0 4px;
+}
+
+.recommendation-callout,
+.recommendation-reasoning {
+  min-width: 0;
+  border: 1px solid #d8d1c2;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.recommendation-callout {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  padding: 14px;
+}
+
+.recommendation-callout div {
+  display: grid;
+  gap: 3px;
+}
+
+.recommendation-callout strong {
+  font-size: 30px;
+  line-height: 1;
+}
+
+.recommendation-callout strong.buy {
+  color: #247146;
+}
+
+.recommendation-callout strong.hold {
+  color: #936313;
+}
+
+.recommendation-callout strong.sell {
+  color: #9c3838;
+}
+
+.recommendation-callout strong.under-review {
+  color: #5d584f;
+}
+
+.recommendation-callout small {
+  color: #766f64;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.recommendation-reasoning {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.recommendation-reasoning p {
+  margin: 0;
+  color: #201d18;
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.driver-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.driver-strip div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e2dbcd;
+  border-radius: 8px;
+  background: #fbf7ee;
+}
+
+.driver-strip span {
+  color: #766f64;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.driver-strip ul {
+  margin: 7px 0 0;
+  padding-left: 18px;
+  color: #4d473d;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .data-source-chip {
   display: inline-flex;
   align-items: center;
@@ -1367,43 +1470,6 @@ button:disabled {
   line-height: 1.55;
 }
 
-.source-line {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  margin: 8px 0 14px;
-  color: #766f64;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.pros-cons {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.pros-cons div {
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid #e2dbcd;
-  border-radius: 8px;
-  background: #fbf7ee;
-}
-
-.pros-cons strong {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 13px;
-}
-
-.pros-cons ul {
-  margin: 0;
-  padding-left: 18px;
-  color: #5d584f;
-  line-height: 1.45;
-}
-
 .news-list {
   display: grid;
   gap: 10px;
@@ -1627,6 +1693,7 @@ button:disabled {
   }
 
   .research-command,
+  .top-recommendation-panel,
   .idea-note-panel {
     grid-template-columns: 1fr;
   }
@@ -1666,7 +1733,9 @@ button:disabled {
 
   .coverage-rail {
     position: static;
+    height: auto;
     max-height: none;
+    overflow: visible;
   }
 
   .universe-list {
@@ -1698,6 +1767,7 @@ button:disabled {
   .metric-grid,
   .scenario-grid,
   .form-row,
+  .driver-strip,
   .source-grid,
   .weekly-list,
   .admin-key-row,

@@ -104,6 +104,13 @@ function signalClass(value: number | null | undefined) {
   return "";
 }
 
+function compactOverview(description: string) {
+  const normalized = description.replace(/\s+/g, " ").trim();
+  const firstSentence = normalized.split(/(?<=[.!?])\s+/)[0] || normalized;
+  if (firstSentence.length <= 170) return firstSentence;
+  return `${firstSentence.slice(0, 167).trim()}...`;
+}
+
 function ideaForTicker(ticker: string, note = ""): SavedIdea {
   const date = today();
   return {
@@ -640,7 +647,7 @@ export default function App() {
               <div>
                 <span className="eyebrow">{company.profile.sector} / {company.profile.industry}</span>
                 <h2>{company.profile.name}</h2>
-                <p>{company.profile.description}</p>
+                <p>{compactOverview(company.profile.description)}</p>
                 <div className="data-source-chip">
                   <DatabaseZap size={14} aria-hidden="true" />
                   {company.recommendation.source_status}
@@ -675,6 +682,8 @@ export default function App() {
                 </button>
               </div>
             </header>
+
+            <TopRecommendationPanel company={company} />
 
             <section className="idea-note-panel">
               <div>
@@ -1117,6 +1126,43 @@ function SavedIdeasPanel({
   );
 }
 
+function TopRecommendationPanel({ company }: { company: CompanyRecord }) {
+  return (
+    <section className="top-recommendation-panel" aria-label="Recommendation summary">
+      <div className="recommendation-callout">
+        <span className="eyebrow">Recommendation</span>
+        <div>
+          <strong className={company.recommendation.rating.toLowerCase().replace(" ", "-")}>
+            {company.recommendation.rating}
+          </strong>
+          <small>{company.recommendation.confidence} confidence / score {formatNumber(company.recommendation.score, 0)}</small>
+        </div>
+      </div>
+      <div className="recommendation-reasoning">
+        <p>{company.recommendation.rationale}</p>
+        <div className="driver-strip">
+          <div>
+            <span>Positive drivers</span>
+            <ul>
+              {(company.recommendation.positives.length ? company.recommendation.positives : ["Awaiting source data."])
+                .slice(0, 3)
+                .map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          </div>
+          <div>
+            <span>Negative drivers</span>
+            <ul>
+              {(company.recommendation.negatives.length ? company.recommendation.negatives : ["Awaiting source data."])
+                .slice(0, 3)
+                .map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function MarketDeskOverview({
   desk,
   trending,
@@ -1330,42 +1376,6 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
             <strong>{formatPct(selectedScenario.implied_return_pct)}</strong>
           </div>
         )}
-      </div>
-
-      <div className="panel recommendation-panel">
-        <div className="panel-heading">
-          <h3>Recommendation</h3>
-          <span className={`stance-pill ${company.recommendation.rating.toLowerCase().replace(" ", "-")}`}>
-            {company.recommendation.rating}
-          </span>
-        </div>
-        <p className="lead-copy">{company.recommendation.rationale}</p>
-        <div className="source-line">
-          <Sparkles size={15} aria-hidden="true" />
-          {company.recommendation.source_status}
-        </div>
-        <div className="pros-cons">
-          <div>
-            <strong>Positive drivers</strong>
-            <ul>
-              {company.recommendation.positives.length ? (
-                company.recommendation.positives.map((item) => <li key={item}>{item}</li>)
-              ) : (
-                <li>Awaiting source data.</li>
-              )}
-            </ul>
-          </div>
-          <div>
-            <strong>Negative drivers</strong>
-            <ul>
-              {company.recommendation.negatives.length ? (
-                company.recommendation.negatives.map((item) => <li key={item}>{item}</li>)
-              ) : (
-                <li>Awaiting source data.</li>
-              )}
-            </ul>
-          </div>
-        </div>
       </div>
 
       <div className="panel">
