@@ -1,3 +1,6 @@
+from datetime import date
+
+from backend.app.models import NewsItem
 from backend.app.providers.snapshot import SnapshotProvider
 from backend.app.providers.yahoo import YahooFinanceProvider
 from backend.app.settings import ROOT_DIR
@@ -73,3 +76,34 @@ def test_yahoo_news_text_strips_html_markup():
     assert "&nbsp;" not in cleaned
     assert "STORY:" not in cleaned
     assert cleaned == "A down day on Wall Street. Jitters over debt-funded AI spending hit semis."
+
+
+def test_yahoo_recommendation_rationale_summarizes_news_flow():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+    base = fallback.get_company("AMD")
+    news = [
+        NewsItem(
+            title="AMD shares rise after analyst upgrade",
+            source="Yahoo Finance",
+            published_at=date(2026, 6, 23),
+            sentiment="Positive",
+            summary="Analysts raised their outlook after stronger demand signals for data center GPUs.",
+            impact_reason="May explain sentiment or multiple movement, but validate against fundamentals.",
+        ),
+        NewsItem(
+            title="Chip stocks face export-control risk",
+            source="Yahoo Finance",
+            published_at=date(2026, 6, 22),
+            sentiment="Negative",
+            summary="Investors are weighing whether tighter export rules could pressure revenue growth.",
+            impact_reason="Could change regulatory, geopolitical, or legal risk in the thesis.",
+        ),
+    ]
+
+    recommendation = provider._build_recommendation("AMD", base.market, base.valuation, news, base.thesis)
+
+    assert "2 recent news item" not in recommendation.rationale
+    assert "Recent news flow looks mixed" in recommendation.rationale
+    assert "AMD shares rise after analyst upgrade" in recommendation.rationale
+    assert "stronger demand signals" in recommendation.rationale

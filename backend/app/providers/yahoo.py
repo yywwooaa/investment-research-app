@@ -403,6 +403,51 @@ class YahooFinanceProvider(DataProvider):
             return "May explain sentiment or multiple movement, but validate against fundamentals."
         return "Worth scanning for thesis impact; no obvious model-driver keyword detected."
 
+    @staticmethod
+    def _shorten_news_text(value: str, limit: int = 170) -> str:
+        text = re.sub(r"\s+", " ", value).strip()
+        if len(text) <= limit:
+            return text
+        sentence = re.split(r"(?<=[.!?])\s+", text)[0]
+        if 40 <= len(sentence) <= limit:
+            return sentence
+        return f"{text[: limit - 3].rsplit(' ', 1)[0]}..."
+
+    def _summarize_news_flow(self, news: list[NewsItem]) -> str:
+        real_news = [
+            item
+            for item in news
+            if not item.title.startswith("No ticker-specific Yahoo Finance news returned")
+        ]
+        if not real_news:
+            return "No clearly ticker-specific recent Yahoo news was returned, so the news signal is not yet useful."
+
+        positive_count = sum(1 for item in real_news if item.sentiment == "Positive")
+        negative_count = sum(1 for item in real_news if item.sentiment == "Negative")
+        if positive_count > negative_count:
+            tone = "positive"
+        elif negative_count > positive_count:
+            tone = "negative"
+        elif positive_count and negative_count:
+            tone = "mixed"
+        else:
+            tone = "neutral"
+
+        prioritized = sorted(
+            real_news,
+            key=lambda item: (
+                item.sentiment == "Neutral",
+                -item.published_at.toordinal(),
+            ),
+        )
+        drivers = []
+        for item in prioritized[:2]:
+            summary = item.summary
+            if summary.lower() == item.title.lower():
+                summary = item.impact_reason
+            drivers.append(f"{item.title}: {self._shorten_news_text(summary)}")
+        return f"Recent news flow looks {tone}: {' | '.join(drivers)}"
+
     def _build_valuation(
         self,
         ticker: str,
@@ -623,17 +668,18 @@ class YahooFinanceProvider(DataProvider):
             source_status += "; data-quality warning: core fields need validation"
         if data_quality_warning:
             source_status += "; data-quality warning: extreme historical move requires validation"
+        news_summary = self._summarize_news_flow(news)
         if rating == "Under Review":
             rationale = (
                 "Under Review because the app detected source gaps or data-quality warnings. "
                 f"Current scaffold shows base-case implied return of {implied_return:.1f}%, "
-                f"relative strength of {market.relative_strength_pct:.1f}%, and {len(news)} recent news item(s)."
+                f"relative strength of {market.relative_strength_pct:.1f}%. {news_summary}"
             )
         else:
             rationale = (
                 f"{rating} based on Yahoo Finance market data, base-case implied return of "
                 f"{implied_return:.1f}%, relative strength of {market.relative_strength_pct:.1f}%, "
-                f"and {len(news)} recent news item(s)."
+                f"and the latest news context. {news_summary}"
             )
         return Recommendation(
             ticker=ticker,

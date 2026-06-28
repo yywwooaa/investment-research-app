@@ -4,6 +4,7 @@ import {
   BarChart3,
   BookmarkCheck,
   BookmarkPlus,
+  Calculator,
   Clipboard,
   DatabaseZap,
   FileText,
@@ -54,10 +55,45 @@ import type {
   UniverseRow
 } from "./types";
 
-const tabs = ["Tear Sheet", "Valuation", "Thesis", "Export"] as const;
+const tabs = ["Tear Sheet", "Valuation", "DCF Report", "Thesis", "Export"] as const;
 type Tab = (typeof tabs)[number];
 type AuthMode = "signin" | "signup" | "forgot" | "reset";
 type SearchSurface = "rail" | "command";
+type DcfForecastRow = {
+  year: string;
+  revenue: number;
+  fcf: number;
+  pvFcf: number;
+};
+type DcfSensitivityCell = {
+  terminalGrowthPct: number;
+  impliedPrice: number;
+};
+type DcfSensitivityRow = {
+  waccPct: number;
+  cells: DcfSensitivityCell[];
+};
+type DcfReportModel = {
+  caseName: ScenarioKey;
+  currentPrice: number;
+  intrinsicValue: number;
+  impliedReturnPct: number;
+  waccPct: number;
+  terminalGrowthPct: number;
+  fcfMarginPct: number;
+  revenueCagrPct: number;
+  baseRevenue: number;
+  shares: number;
+  netDebt: number;
+  forecast: DcfForecastRow[];
+  pvFcf: number;
+  terminalValue: number;
+  pvTerminalValue: number;
+  enterpriseValue: number;
+  equityValue: number;
+  sensitivityGrowths: number[];
+  sensitivity: DcfSensitivityRow[];
+};
 
 const stanceOptions: Stance[] = ["Buy", "Hold", "Sell", "Under Review"];
 const scenarioKeys: ScenarioKey[] = ["bull", "base", "bear"];
@@ -77,9 +113,125 @@ function formatMoney(value: number | null | undefined) {
   return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
+function formatCompactBillions(value: number | null | undefined, digits = 1) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  return `$${value.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits })}B`;
+}
+
 function formatMultiple(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
   return `${formatNumber(value)}x`;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function calculateDcfValue({
+  baseRevenue,
+  revenueCagrPct,
+  fcfMarginPct,
+  waccPct,
+  terminalGrowthPct,
+  netDebt,
+  shares
+}: {
+  baseRevenue: number;
+  revenueCagrPct: number;
+  fcfMarginPct: number;
+  waccPct: number;
+  terminalGrowthPct: number;
+  netDebt: number;
+  shares: number;
+}) {
+  const wacc = Math.max(waccPct / 100, 0.01);
+  const terminalGrowth = Math.min(terminalGrowthPct / 100, wacc - 0.005);
+  const revenueGrowth = revenueCagrPct / 100;
+  const fcfMargin = fcfMarginPct / 100;
+  const forecast = Array.from({ length: 5 }, (_, index) => {
+    const year = index + 1;
+    const revenue = baseRevenue * (1 + revenueGrowth) ** year;
+    const fcf = revenue * fcfMargin;
+    const pvFcf = fcf / (1 + wacc) ** year;
+    return { year: `${new Date().getFullYear() + year}`, revenue, fcf, pvFcf };
+  });
+  const finalFcf = forecast[forecast.length - 1]?.fcf ?? 0;
+  const terminalValue = finalFcf * (1 + terminalGrowth) / Math.max(wacc - terminalGrowth, 0.005);
+  const pvTerminalValue = terminalValue / (1 + wacc) ** forecast.length;
+  const pvFcf = forecast.reduce((sum, row) => sum + row.pvFcf, 0);
+  const enterpriseValue = pvFcf + pvTerminalValue;
+  const equityValue = enterpriseValue - netDebt;
+  const impliedPrice = shares > 0 ? equityValue / shares : 0;
+
+  return {
+    forecast,
+    pvFcf,
+    terminalValue,
+    pvTerminalValue,
+    enterpriseValue,
+    equityValue,
+    impliedPrice
+  };
+}
+
+function buildDcfReport(company: CompanyRecord, valuation: ScenarioValuation): DcfReportModel {
+  const caseName = valuation.selected_case;
+  const assumption = valuation[caseName];
+  const currentPrice = company.market.price;
+  const latestRevenue = company.financials.annual[company.financials.annual.length - 1]?.revenue ?? valuation.base_year_revenue;
+  const baseRevenue = Math.max(valuation.base_year_revenue || latestRevenue || 0, 0);
+  const sharesFromMarketCap = currentPrice > 0 ? company.profile.market_cap / currentPrice : 0;
+  const shares = valuation.diluted_shares > 0 ? valuation.diluted_shares : sharesFromMarketCap;
+  const fcfMarginPct =
+    company.market.fcf_yield_pct && company.market.fcf_yield_pct > 0 && company.profile.market_cap > 0 && baseRevenue > 0
+      ? clamp((company.profile.market_cap * (company.market.fcf_yield_pct / 100) / baseRevenue) * 100, 2, 45)
+      : clamp(assumption.terminal_margin_pct, 2, 45);
+  const terminalGrowthPct = 3;
+  const baseDcf = calculateDcfValue({
+    baseRevenue,
+    revenueCagrPct: assumption.revenue_cagr_pct,
+    fcfMarginPct,
+    waccPct: assumption.discount_rate_pct,
+    terminalGrowthPct,
+    netDebt: valuation.net_cash_debt,
+    shares
+  });
+  const intrinsicValue = baseDcf.impliedPrice || assumption.implied_price;
+  const impliedReturnPct = currentPrice > 0 ? (intrinsicValue / currentPrice - 1) * 100 : assumption.implied_return_pct;
+  const sensitivityGrowths = [2, 2.5, 3, 3.5, 4];
+  const sensitivityWaccs = [-1, -0.5, 0, 0.5, 1].map((offset) => Math.max(assumption.discount_rate_pct + offset, 1));
+  const sensitivity = sensitivityWaccs.map((waccPct) => ({
+    waccPct,
+    cells: sensitivityGrowths.map((growth) => ({
+      terminalGrowthPct: growth,
+      impliedPrice: calculateDcfValue({
+        baseRevenue,
+        revenueCagrPct: assumption.revenue_cagr_pct,
+        fcfMarginPct,
+        waccPct,
+        terminalGrowthPct: growth,
+        netDebt: valuation.net_cash_debt,
+        shares
+      }).impliedPrice
+    }))
+  }));
+
+  return {
+    caseName,
+    currentPrice,
+    intrinsicValue,
+    impliedReturnPct,
+    waccPct: assumption.discount_rate_pct,
+    terminalGrowthPct,
+    fcfMarginPct,
+    revenueCagrPct: assumption.revenue_cagr_pct,
+    baseRevenue,
+    shares,
+    netDebt: valuation.net_cash_debt,
+    ...baseDcf,
+    sensitivityGrowths,
+    sensitivity
+  };
 }
 
 function linesToText(lines: string[]) {
@@ -733,6 +885,7 @@ export default function App() {
                 >
                   {tab === "Tear Sheet" && <BarChart3 size={16} aria-hidden="true" />}
                   {tab === "Valuation" && <TrendingUp size={16} aria-hidden="true" />}
+                  {tab === "DCF Report" && <Calculator size={16} aria-hidden="true" />}
                   {tab === "Thesis" && <DatabaseZap size={16} aria-hidden="true" />}
                   {tab === "Export" && <FileText size={16} aria-hidden="true" />}
                   {tab}
@@ -742,8 +895,15 @@ export default function App() {
 
             {activeTab === "Tear Sheet" && <TearSheet company={company} selectedScenario={selectedScenario} />}
             {activeTab === "Valuation" && (
-              <ValuationPanel valuation={valuationDraft} updateScenario={updateScenario} setValuation={setValuationDraft} save={saveValuation} />
+              <ValuationPanel
+                valuation={valuationDraft}
+                updateScenario={updateScenario}
+                setValuation={setValuationDraft}
+                save={saveValuation}
+                openReport={() => setActiveTab("DCF Report")}
+              />
             )}
+            {activeTab === "DCF Report" && <DcfReportPanel company={company} valuation={valuationDraft} />}
             {activeTab === "Thesis" && <ThesisPanel thesis={thesisDraft} setThesis={setThesisDraft} save={saveThesis} />}
             {activeTab === "Export" && (
               <ExportPanel exportDraft={exportDraft} exportSubstack={exportSubstack} company={company} />
@@ -1445,12 +1605,14 @@ function ValuationPanel({
   valuation,
   updateScenario,
   setValuation,
-  save
+  save,
+  openReport
 }: {
   valuation: ScenarioValuation;
   updateScenario: (caseName: ScenarioKey, field: keyof ScenarioAssumption, value: number) => void;
   setValuation: Dispatch<SetStateAction<ScenarioValuation | null>>;
   save: () => void;
+  openReport: () => void;
 }) {
   const scenarioData = scenarioKeys.map((key) => ({
     case: key.toUpperCase(),
@@ -1462,11 +1624,17 @@ function ValuationPanel({
     <section className="content-grid valuation-layout">
       <div className="panel">
         <div className="panel-heading">
-          <h3>Scenario DCF</h3>
-          <button className="secondary-button" type="button" onClick={save}>
-            <Save size={16} aria-hidden="true" />
-            Save
-          </button>
+          <h3>Scenario Assumptions</h3>
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={openReport}>
+              <Calculator size={16} aria-hidden="true" />
+              View DCF Report
+            </button>
+            <button className="secondary-button" type="button" onClick={save}>
+              <Save size={16} aria-hidden="true" />
+              Save
+            </button>
+          </div>
         </div>
         <div className="scenario-grid">
           {scenarioKeys.map((caseName) => (
@@ -1518,6 +1686,186 @@ function ValuationPanel({
   );
 }
 
+function DcfReportPanel({ company, valuation }: { company: CompanyRecord; valuation: ScenarioValuation }) {
+  const report = buildDcfReport(company, valuation);
+  const upsideLabel = report.impliedReturnPct >= 0 ? "Implied Upside" : "Implied Downside";
+  const sensitivityBaseGrowth = report.sensitivityGrowths.find((growth) => growth === report.terminalGrowthPct) ?? report.sensitivityGrowths[0];
+  const topNews = [...company.news].sort((a, b) => newsRank(b) - newsRank(a)).slice(0, 2);
+  const conclusionTone =
+    company.recommendation.rating === "Buy"
+      ? "The current setup screens positively, but the case still depends on validating the forecast and news drivers."
+      : company.recommendation.rating === "Sell"
+        ? "The current setup screens negatively, so the main work is checking whether the downside is already priced in."
+        : "The current setup is balanced, so the name belongs on the watchlist until the valuation or news flow improves.";
+
+  return (
+    <section className="dcf-report-panel" aria-label={`${company.profile.ticker} DCF report`}>
+      <header className="dcf-report-header">
+        <div>
+          <h3>{company.profile.name} ({company.profile.ticker})</h3>
+          <p>Equity Research - DCF Valuation Summary | Sector: {company.profile.sector || "n/a"} | {new Date().toLocaleDateString(undefined, { month: "long", year: "numeric" })}</p>
+        </div>
+        <strong className={`dcf-rating ${company.recommendation.rating.toLowerCase().replace(" ", "-")}`}>
+          {company.recommendation.rating}
+        </strong>
+      </header>
+
+      <div className="dcf-summary-grid">
+        <DcfSummaryTile label="Current Price" value={formatMoney(report.currentPrice)} />
+        <DcfSummaryTile label="Intrinsic Value" value={formatMoney(report.intrinsicValue)} />
+        <DcfSummaryTile label={upsideLabel} value={formatPct(report.impliedReturnPct)} tone={report.impliedReturnPct >= 0 ? "positive" : "negative"} />
+        <DcfSummaryTile label="WACC" value={`${formatNumber(report.waccPct, 2)}%`} />
+      </div>
+
+      <div className="dcf-report-grid">
+        <section>
+          <h4>Revenue & FCF Forecast ($B)</h4>
+          <div className="table-shell">
+            <table className="dcf-table">
+              <thead>
+                <tr>
+                  <th>Year</th>
+                  <th>Revenue</th>
+                  <th>FCF</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.forecast.map((row) => (
+                  <tr key={row.year}>
+                    <td>{row.year}</td>
+                    <td>{formatNumber(row.revenue, 1)}</td>
+                    <td>{formatNumber(row.fcf, 1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section>
+          <h4>Valuation Bridge ($B, except per-share)</h4>
+          <div className="table-shell">
+            <table className="dcf-table bridge-table">
+              <tbody>
+                <tr>
+                  <td>Sum of PV of FCF</td>
+                  <td>{formatNumber(report.pvFcf, 1)}</td>
+                </tr>
+                <tr>
+                  <td>+ PV of Terminal Value</td>
+                  <td>{formatNumber(report.pvTerminalValue, 1)}</td>
+                </tr>
+                <tr>
+                  <td>= Enterprise Value</td>
+                  <td>{formatNumber(report.enterpriseValue, 1)}</td>
+                </tr>
+                <tr>
+                  <td>{report.netDebt >= 0 ? "- Net Debt" : "+ Net Cash"}</td>
+                  <td>{formatNumber(Math.abs(report.netDebt), 1)}</td>
+                </tr>
+                <tr>
+                  <td>= Equity Value</td>
+                  <td>{formatNumber(report.equityValue, 1)}</td>
+                </tr>
+                <tr>
+                  <td>/ Shares Outstanding (B)</td>
+                  <td>{formatNumber(report.shares, 2)}</td>
+                </tr>
+                <tr className="highlight-row">
+                  <td>= Implied Share Price</td>
+                  <td>{formatMoney(report.intrinsicValue)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <section className="dcf-assumptions">
+        <h4>Key Assumptions</h4>
+        <div className="assumption-grid">
+          <DcfAssumption label="Selected Case" value={report.caseName.toUpperCase()} />
+          <DcfAssumption label="Base Revenue" value={formatCompactBillions(report.baseRevenue, 1)} />
+          <DcfAssumption label="Revenue CAGR" value={`${formatNumber(report.revenueCagrPct, 1)}%`} />
+          <DcfAssumption label="FCF Margin" value={`${formatNumber(report.fcfMarginPct, 1)}%`} />
+          <DcfAssumption label="Terminal Growth" value={`${formatNumber(report.terminalGrowthPct, 1)}%`} />
+          <DcfAssumption label="Net Debt / (Cash)" value={formatCompactBillions(report.netDebt, 1)} />
+        </div>
+        <p>
+          This report uses the selected valuation case, Yahoo/yfinance quote and profile fields where available, and your editable model assumptions.
+        </p>
+      </section>
+
+      <section className="dcf-sensitivity">
+        <h4>Sensitivity: Implied Share Price ($) - WACC vs. Terminal Growth Rate</h4>
+        <div className="table-shell">
+          <table className="dcf-table sensitivity-table">
+            <thead>
+              <tr>
+                <th>WACC \ g</th>
+                {report.sensitivityGrowths.map((growth) => (
+                  <th key={growth}>{formatNumber(growth, 1)}%</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {report.sensitivity.map((row) => (
+                <tr key={row.waccPct}>
+                  <th>{formatNumber(row.waccPct, 2)}%</th>
+                  {row.cells.map((cell) => (
+                    <td
+                      key={`${row.waccPct}-${cell.terminalGrowthPct}`}
+                      className={row.waccPct === report.waccPct && cell.terminalGrowthPct === sensitivityBaseGrowth ? "highlight-cell" : ""}
+                    >
+                      {formatNumber(cell.impliedPrice, 2)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <small>Base case highlighted: WACC {formatNumber(report.waccPct, 2)}%, terminal growth {formatNumber(report.terminalGrowthPct, 1)}%.</small>
+      </section>
+
+      <section className="dcf-conclusion">
+        <h4>Conclusion</h4>
+        <p>
+          Under the selected {report.caseName} case, the model indicates {formatPct(report.impliedReturnPct)} implied return versus the current quote. {conclusionTone}
+        </p>
+        {topNews.length > 0 && (
+          <ul>
+            {topNews.map((item) => (
+              <li key={`${item.title}-${item.published_at}`}>{item.title}</li>
+            ))}
+          </ul>
+        )}
+        <small>
+          Disclaimer: This is an independent, educational DCF exercise. Forecasts and assumptions are simplified and should not be treated as investment advice.
+        </small>
+      </section>
+    </section>
+  );
+}
+
+function DcfSummaryTile({ label, value, tone }: { label: string; value: string; tone?: "positive" | "negative" }) {
+  return (
+    <div className={`dcf-summary-tile ${tone ?? ""}`}>
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function DcfAssumption({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 function NumberField({
   label,
   value,
@@ -1536,7 +1884,12 @@ function NumberField({
       <span>{label}</span>
       <div>
         {prefix && <small>{prefix}</small>}
-        <input type="number" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+        <input
+          type="number"
+          step={prefix ? "0.01" : suffix === "x" ? "0.1" : "0.1"}
+          value={Number.isFinite(value) ? Number(value.toFixed(prefix ? 2 : suffix === "x" ? 1 : 1)) : 0}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
         {suffix && <small>{suffix}</small>}
       </div>
     </label>
