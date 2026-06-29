@@ -93,9 +93,9 @@ class YahooFinanceProvider(DataProvider):
 
         profile = self._build_profile(ticker, info, fast_info, base)
         market = self._build_market(info, fast_info, history, base)
-        financials = self._build_financials(info, base)
+        financials = self._build_financials(yf_ticker, info, base)
         news = self._build_news(yf_ticker, ticker, profile.name)
-        peers = base.peers if base else []
+        peers = self._build_peers(yf, ticker, profile, info, base)
         valuation = self._build_valuation(ticker, market, info, financials, base)
         thesis = self._build_thesis(ticker, profile, market, valuation, news, base)
         provenance = self._build_provenance(ticker, info, fast_info, history, base, news, market, valuation)
@@ -134,6 +134,19 @@ class YahooFinanceProvider(DataProvider):
             return history if history is not None and not history.empty else None
         except Exception:
             return None
+
+    @staticmethod
+    def _safe_statement(yf_ticker: Any, *attrs: str):
+        for attr in attrs:
+            try:
+                statement = getattr(yf_ticker, attr)
+                if callable(statement):
+                    statement = statement()
+                if statement is not None and not getattr(statement, "empty", True):
+                    return statement
+            except Exception:
+                continue
+        return None
 
     @staticmethod
     def _num(value: Any, fallback: float | None = None) -> float | None:
@@ -265,37 +278,194 @@ class YahooFinanceProvider(DataProvider):
             fcf_yield_pct=fcf_yield,
         )
 
-    def _build_financials(self, info: dict[str, Any], base: CompanyRecord | None) -> FinancialSeries:
-        if base:
-            latest_revenue = self._num(info.get("totalRevenue"), None)
-            latest_ebitda = self._num(info.get("ebitda"), None)
-            latest_fcf = self._num(info.get("freeCashflow"), None)
-            if latest_revenue:
-                annual = list(base.financials.annual)
-                annual[-1] = FinancialPoint(
-                    period="Yahoo TTM",
-                    revenue=latest_revenue / 1_000_000_000,
-                    ebitda=(latest_ebitda / 1_000_000_000) if latest_ebitda else annual[-1].ebitda,
-                    ebitda_margin_pct=(latest_ebitda / latest_revenue * 100) if latest_ebitda else annual[-1].ebitda_margin_pct,
-                    fcf=(latest_fcf / 1_000_000_000) if latest_fcf else annual[-1].fcf,
-                    eps=self._num(info.get("trailingEps"), annual[-1].eps),
+    @staticmethod
+    def _statement_value(statement: Any, column: Any, row_names: list[str]) -> float | None:
+        if statement is None:
+            return None
+        for row_name in row_names:
+            try:
+                if row_name in statement.index:
+                    value = statement.loc[row_name, column]
+                    number = YahooFinanceProvider._num(value, None)
+                    if number is not None:
+                        return number
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _statement_period(column: Any) -> str:
+        try:
+            return str(column.year)
+        except AttributeError:
+            text = str(column)
+            return text[:4] if len(text) >= 4 else text
+
+    def _points_from_statements(self, income: Any, cashflow: Any, info: dict[str, Any], *, quarterly: bool = False) -> list[FinancialPoint]:
+        if income is None:
+            return []
+        columns = sorted(list(income.columns))
+        points: list[FinancialPoint] = []
+        for column in columns:
+            revenue = self._statement_value(income, column, ["Total Revenue", "Operating Revenue", "TotalRevenue"])
+            if not revenue or revenue <= 0:
+                continue
+            ebitda = self._statement_value(income, column, ["EBITDA", "Normalized EBITDA", "Ebitda"])
+            operating_cashflow = self._statement_value(
+                cashflow,
+                column,
+                ["Operating Cash Flow", "Total Cash From Operating Activities", "Cash Flow From Continuing Operating Activities"],
+            )
+            capex = self._statement_value(cashflow, column, ["Capital Expenditure", "Capital Expenditures"])
+            fcf = self._statement_value(cashflow, column, ["Free Cash Flow", "FreeCashFlow"])
+            if fcf is None and operating_cashflow is not None and capex is not None:
+                fcf = operating_cashflow + capex
+            eps = self._statement_value(income, column, ["Diluted EPS", "Basic EPS", "DilutedEPS", "BasicEPS"])
+            suffix = "Q" if quarterly else ""
+            points.append(
+                FinancialPoint(
+                    period=f"{self._statement_period(column)}{suffix}",
+                    revenue=revenue / 1_000_000_000,
+                    ebitda=(ebitda / 1_000_000_000) if ebitda is not None else None,
+                    ebitda_margin_pct=(ebitda / revenue * 100) if ebitda is not None and revenue else None,
+                    fcf=(fcf / 1_000_000_000) if fcf is not None else None,
+                    eps=eps if eps is not None else self._num(info.get("trailingEps"), None),
                 )
+            )
+        return points
+
+    def _ttm_financial_point(self, info: dict[str, Any], fallback: FinancialPoint | None = None) -> FinancialPoint | None:
+        revenue = self._num(info.get("totalRevenue"), None)
+        if not revenue:
+            return fallback
+        ebitda = self._num(info.get("ebitda"), None)
+        fcf = self._num(info.get("freeCashflow"), None)
+        return FinancialPoint(
+            period="Yahoo TTM",
+            revenue=revenue / 1_000_000_000,
+            ebitda=(ebitda / 1_000_000_000) if ebitda else (fallback.ebitda if fallback else None),
+            ebitda_margin_pct=(ebitda / revenue * 100) if ebitda else (fallback.ebitda_margin_pct if fallback else None),
+            fcf=(fcf / 1_000_000_000) if fcf else (fallback.fcf if fallback else None),
+            eps=self._num(info.get("trailingEps"), fallback.eps if fallback else None),
+        )
+
+    def _build_financials(self, yf_ticker: Any, info: dict[str, Any], base: CompanyRecord | None) -> FinancialSeries:
+        annual_income = self._safe_statement(yf_ticker, "income_stmt", "financials")
+        annual_cashflow = self._safe_statement(yf_ticker, "cashflow")
+        quarterly_income = self._safe_statement(yf_ticker, "quarterly_income_stmt", "quarterly_financials")
+        quarterly_cashflow = self._safe_statement(yf_ticker, "quarterly_cashflow")
+
+        annual = self._points_from_statements(annual_income, annual_cashflow, info)
+        quarterly = self._points_from_statements(quarterly_income, quarterly_cashflow, info, quarterly=True)
+        ttm = self._ttm_financial_point(info, annual[-1] if annual else None)
+
+        if len(annual) >= 2:
+            if ttm and (not annual or annual[-1].period != "Yahoo TTM"):
+                annual = [*annual[-4:], ttm]
+            return FinancialSeries(annual=annual, quarterly=quarterly or annual[-4:])
+
+        if base:
+            if ttm:
+                annual = list(base.financials.annual)
+                annual[-1] = ttm
                 return FinancialSeries(annual=annual, quarterly=base.financials.quarterly)
             return base.financials
 
-        revenue = self._num(info.get("totalRevenue"), 0) or 0
-        ebitda = self._num(info.get("ebitda"), None)
-        fcf = self._num(info.get("freeCashflow"), None)
-        margin = (ebitda / revenue * 100) if ebitda and revenue else None
-        point = FinancialPoint(
-            period="Yahoo TTM",
-            revenue=revenue / 1_000_000_000,
-            ebitda=(ebitda / 1_000_000_000) if ebitda else None,
-            ebitda_margin_pct=margin,
-            fcf=(fcf / 1_000_000_000) if fcf else None,
-            eps=self._num(info.get("trailingEps"), None),
-        )
+        point = ttm or FinancialPoint(period="Yahoo TTM", revenue=0, eps=self._num(info.get("trailingEps"), None))
         return FinancialSeries(annual=[point], quarterly=[point])
+
+    @staticmethod
+    def _revenue_growth_from_points(points: list[FinancialPoint]) -> float | None:
+        usable = [point for point in points if point.revenue > 0 and not point.period.endswith("Q") and point.period != "Yahoo TTM"]
+        if len(usable) < 2:
+            return None
+        start = usable[0].revenue
+        end = usable[-1].revenue
+        years = max(len(usable) - 1, 1)
+        if start <= 0 or end <= 0:
+            return None
+        return ((end / start) ** (1 / years) - 1) * 100
+
+    def _peer_candidates(self, profile: CompanyProfile, info: dict[str, Any]) -> list[str]:
+        text = f"{profile.sector} {profile.industry} {profile.name} {info.get('longBusinessSummary', '')}".lower()
+        if any(term in text for term in ["coffee", "restaurant", "beverage", "food service"]):
+            return ["SBUX", "BROS", "YUMC", "MCD", "QSR"]
+        if any(term in text for term in ["consumer electronics", "phone", "smartphone", "personal computer"]):
+            return ["MSFT", "GOOGL", "META", "AMZN", "DELL", "HPQ"]
+        if any(term in text for term in ["semiconductor", "chip", "foundry"]):
+            return ["NVDA", "AMD", "AVGO", "TSM", "ASML", "MU"]
+        if any(term in text for term in ["software", "cloud", "internet content"]):
+            return ["MSFT", "GOOGL", "AMZN", "META", "ORCL", "CRM"]
+        if any(term in text for term in ["bank", "financial"]):
+            return ["JPM", "BAC", "WFC", "C", "GS", "MS"]
+        if any(term in text for term in ["auto", "vehicle", "automaker"]):
+            return ["TSLA", "GM", "F", "TM", "RIVN"]
+        sector_matches = [
+            record.profile.ticker
+            for record in self.fallback.list_companies()
+            if record.profile.sector.lower() == profile.sector.lower()
+        ]
+        return sector_matches or [record.profile.ticker for record in self.fallback.list_companies()[:5]]
+
+    def _fetch_peer_metric(self, yf: Any, ticker: str) -> PeerMetric | None:
+        try:
+            yf_ticker = yf.Ticker(ticker)
+            info = self._safe_info(yf_ticker)
+            if not info:
+                return None
+            financials = self._build_financials(yf_ticker, info, None)
+            latest = financials.annual[-1] if financials.annual else None
+            revenue = self._num(info.get("totalRevenue"), None) or ((latest.revenue * 1_000_000_000) if latest else None)
+            market_cap = self._num(info.get("marketCap"), None)
+            enterprise_value = self._num(info.get("enterpriseValue"), None) or market_cap
+            ebitda = self._num(info.get("ebitda"), None) or ((latest.ebitda * 1_000_000_000) if latest and latest.ebitda else None)
+            free_cashflow = self._num(info.get("freeCashflow"), None) or ((latest.fcf * 1_000_000_000) if latest and latest.fcf else None)
+            ev_sales = enterprise_value / revenue if enterprise_value and revenue else self._num(info.get("enterpriseToRevenue"), 0) or 0
+            ev_ebitda = enterprise_value / ebitda if enterprise_value and ebitda else self._num(info.get("enterpriseToEbitda"), None)
+            growth = self._revenue_growth_from_points(financials.annual)
+            if growth is None:
+                growth = (self._num(info.get("revenueGrowth"), 0) or 0) * 100
+            fcf_yield = free_cashflow / market_cap * 100 if free_cashflow and market_cap else None
+            return PeerMetric(
+                ticker=ticker,
+                name=info.get("shortName") or info.get("longName") or ticker,
+                ev_sales_ntm=self._reasonable(ev_sales, 0, upper=100) or 0,
+                ev_ebitda_ntm=self._reasonable(ev_ebitda, None, upper=200),
+                revenue_growth_ntm_pct=growth,
+                ebitda_margin_ntm_pct=(ebitda / revenue * 100) if ebitda and revenue else None,
+                fcf_yield_pct=self._reasonable(fcf_yield, None, lower=-50, upper=50),
+            )
+        except Exception:
+            return None
+
+    def _build_peers(
+        self,
+        yf: Any,
+        ticker: str,
+        profile: CompanyProfile,
+        info: dict[str, Any],
+        base: CompanyRecord | None,
+    ) -> list[PeerMetric]:
+        fallback_peers = base.peers if base and base.peers else []
+        fallback_by_ticker = {peer.ticker.upper(): peer for peer in fallback_peers}
+        candidates = [peer.ticker for peer in fallback_peers] or self._peer_candidates(profile, info)
+        peers: list[PeerMetric] = []
+        seen = {ticker.upper()}
+        for candidate in candidates:
+            normalized = candidate.upper().strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            metric = self._fetch_peer_metric(yf, normalized)
+            if metric is not None:
+                if metric.ev_sales_ntm <= 0 and fallback_by_ticker.get(normalized):
+                    metric = fallback_by_ticker[normalized]
+                peers.append(metric)
+            elif fallback_by_ticker.get(normalized):
+                peers.append(fallback_by_ticker[normalized])
+            if len(peers) >= 5:
+                break
+        return peers or fallback_peers
 
     def _build_news(self, yf_ticker: Any, ticker: str, company_name: str) -> list[NewsItem]:
         try:

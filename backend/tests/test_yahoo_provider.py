@@ -1,5 +1,7 @@
 from datetime import date
 
+import pandas as pd
+
 from backend.app.models import NewsItem
 from backend.app.providers.snapshot import SnapshotProvider
 from backend.app.providers.yahoo import YahooFinanceProvider
@@ -107,3 +109,84 @@ def test_yahoo_recommendation_rationale_summarizes_news_flow():
     assert "Recent news flow looks mixed" in recommendation.rationale
     assert "AMD shares rise after analyst upgrade" in recommendation.rationale
     assert "stronger demand signals" in recommendation.rationale
+
+
+class FakeTicker:
+    def __init__(self, info, income=None, cashflow=None, quarterly_income=None, quarterly_cashflow=None):
+        self.info = info
+        self.income_stmt = income
+        self.cashflow = cashflow
+        self.quarterly_income_stmt = quarterly_income
+        self.quarterly_cashflow = quarterly_cashflow
+
+
+def test_yahoo_financials_use_multi_year_statement_history_for_ad_hoc_tickers():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+    income = pd.DataFrame(
+        {
+            pd.Timestamp("2023-12-31"): {"Total Revenue": 10_000_000_000, "EBITDA": 1_000_000_000, "Diluted EPS": 1.1},
+            pd.Timestamp("2024-12-31"): {"Total Revenue": 12_000_000_000, "EBITDA": 1_500_000_000, "Diluted EPS": 1.4},
+            pd.Timestamp("2025-12-31"): {"Total Revenue": 15_000_000_000, "EBITDA": 2_100_000_000, "Diluted EPS": 1.9},
+        }
+    )
+    cashflow = pd.DataFrame(
+        {
+            pd.Timestamp("2023-12-31"): {"Free Cash Flow": 800_000_000},
+            pd.Timestamp("2024-12-31"): {"Free Cash Flow": 1_000_000_000},
+            pd.Timestamp("2025-12-31"): {"Free Cash Flow": 1_300_000_000},
+        }
+    )
+    ticker = FakeTicker(
+        {"totalRevenue": 16_000_000_000, "ebitda": 2_400_000_000, "freeCashflow": 1_600_000_000, "trailingEps": 2.1},
+        income=income,
+        cashflow=cashflow,
+    )
+
+    financials = provider._build_financials(ticker, ticker.info, None)
+
+    assert [point.period for point in financials.annual] == ["2023", "2024", "2025", "Yahoo TTM"]
+    assert [point.revenue for point in financials.annual] == [10, 12, 15, 16]
+    assert financials.annual[-1].ebitda_margin_pct == 15
+
+
+class FakeYFinance:
+    def __init__(self, tickers):
+        self.tickers = tickers
+
+    def Ticker(self, ticker):
+        return self.tickers[ticker]
+
+
+def test_yahoo_generates_peer_metrics_for_off_universe_tickers():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+    peer_tickers = {}
+    for ticker, revenue in [("SBUX", 36_000_000_000), ("BROS", 1_500_000_000)]:
+        income = pd.DataFrame(
+            {
+                pd.Timestamp("2024-12-31"): {"Total Revenue": revenue * 0.8, "EBITDA": revenue * 0.12},
+                pd.Timestamp("2025-12-31"): {"Total Revenue": revenue, "EBITDA": revenue * 0.15},
+            }
+        )
+        peer_tickers[ticker] = FakeTicker(
+            {
+                "shortName": ticker,
+                "totalRevenue": revenue,
+                "enterpriseValue": revenue * 3,
+                "ebitda": revenue * 0.15,
+                "marketCap": revenue * 2,
+                "freeCashflow": revenue * 0.08,
+            },
+            income=income,
+        )
+
+    profile = fallback.get_company("NVDA").profile.model_copy(
+        update={"ticker": "LKNCY", "name": "Luckin Coffee Inc.", "sector": "Consumer Cyclical", "industry": "Restaurants"}
+    )
+
+    peers = provider._build_peers(FakeYFinance(peer_tickers), "LKNCY", profile, {}, None)
+
+    assert [peer.ticker for peer in peers] == ["SBUX", "BROS"]
+    assert peers[0].ev_sales_ntm == 3
+    assert round(peers[0].revenue_growth_ntm_pct, 1) == 25.0
