@@ -1,3 +1,4 @@
+import time
 from datetime import date
 
 import pandas as pd
@@ -292,3 +293,51 @@ def test_yahoo_generates_peer_metrics_for_off_universe_tickers():
     assert [peer.ticker for peer in peers] == ["SBUX", "BROS"]
     assert peers[0].ev_sales_ntm == 3
     assert round(peers[0].revenue_growth_ntm_pct, 1) == 25.0
+
+
+def test_yahoo_lazy_universe_load_does_not_fetch_live_companies():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback, lazy_universe_load=True)
+
+    def fail_fetch(*_args, **_kwargs):
+        raise AssertionError("Initial universe load should not fetch live Yahoo company pages")
+
+    provider._fetch_company = fail_fetch
+
+    records = provider.list_companies()
+
+    assert len(records) == 12
+    assert records[0].profile.ticker == "NVDA"
+    assert records[0].recommendation.source_status == "Starter tape; open ticker for live Yahoo/Alpha refresh"
+
+
+def test_yahoo_get_company_uses_fresh_memory_cache_without_refetching():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback, lazy_universe_load=True)
+    record = fallback.get_company("NVDA")
+    provider._records = {"NVDA": record}
+    provider._record_timestamps = {"NVDA": time.time()}
+
+    def fail_fetch(*_args, **_kwargs):
+        raise AssertionError("Fresh cached company should not refetch")
+
+    provider._fetch_company = fail_fetch
+
+    assert provider.get_company("NVDA") == record
+
+
+def test_yahoo_get_company_uses_disk_cache_without_refetching(tmp_path):
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    record = fallback.get_company("NVDA")
+    writer = YahooFinanceProvider(fallback, company_cache_dir=tmp_path)
+    writer._store_company_cache("NVDA", record)
+
+    reader = YahooFinanceProvider(fallback, company_cache_dir=tmp_path)
+
+    def fail_fetch(*_args, **_kwargs):
+        raise AssertionError("Fresh disk-cached company should not refetch")
+
+    reader._fetch_company = fail_fetch
+
+    assert reader.get_company("NVDA").profile.ticker == "NVDA"
+    assert reader._record_is_fresh("NVDA")

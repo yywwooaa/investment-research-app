@@ -79,10 +79,16 @@ Optional free/public enrichment:
 
 ```bash
 ALPHAVANTAGE_API_KEY=your-alpha-vantage-key
+# Optional comma-separated failover keys stored only in Render/local .env.
+ALPHAVANTAGE_API_KEYS=your-second-key,your-third-key
+VRW_ALPHA_VANTAGE_CACHE_PATH=data/local/alpha_vantage_cache.json
+VRW_COMPANY_CACHE_DIR=data/local/company_cache
+VRW_COMPANY_CACHE_TTL_SECONDS=900
+VRW_LAZY_UNIVERSE_LOAD=true
 VRW_SEC_USER_AGENT="Variant Research Workbench your-email@example.com"
 ```
 
-SEC EDGAR does not require an API key and is used for recent filing flags. Alpha Vantage is optional and powers aggregated analyst ratings, target price, earnings-calendar flags, and additional news/sentiment when the key is present.
+SEC EDGAR does not require an API key and is used for recent filing flags. Alpha Vantage is optional and powers aggregated analyst ratings, target price, earnings-calendar flags, and additional news/sentiment when the key is present. Alpha Vantage responses are cached for 24 hours under ignored `data/local/` by default to reduce free-tier usage. Yahoo company pages are cached for 15 minutes by default, and the starter universe loads lazily so the app opens before every tracked ticker is refreshed.
 
 Generate a local weekly research packet:
 
@@ -117,9 +123,9 @@ Bloomberg setup reference: [Bloomberg API Library](https://www.bloomberg.com/pro
 The app currently separates the research workflow from the data source:
 
 - The starter tape can include synthetic/sanitized fixture values and demo news summaries.
-- Yahoo mode uses `yfinance` for free/public market data and news where available. `yfinance` is unofficial, not affiliated with Yahoo, and should be treated as research/educational/personal-use data rather than institutional-grade data.
+- Yahoo mode uses `yfinance` for free/public market data and news where available. `yfinance` is unofficial, not affiliated with Yahoo, and should be treated as research/educational/personal-use data rather than institutional-grade data. For speed, the dashboard loads a starter/cached tape first; opening a ticker or pressing Refresh performs live enrichment.
 - SEC EDGAR is used for official filing-event flags where available.
-- Alpha Vantage can add aggregated analyst ratings, target prices, earnings-calendar events, and news sentiment when `ALPHAVANTAGE_API_KEY` is configured.
+- Alpha Vantage can add aggregated analyst ratings, target prices, earnings-calendar events, and news sentiment when `ALPHAVANTAGE_API_KEY` or `ALPHAVANTAGE_API_KEYS` is configured. Responses are cached locally for 24 hours; cache files live under ignored `data/local/` and should not be committed.
 - Bloomberg mode can refresh financial and market reference fields locally through BLPAPI.
 - Current-news automation still needs a licensed source: Bloomberg News/Terminal entitlements, a market-data API with news, RSS feeds you are allowed to use, or manually approved imports.
 - Data provenance is field-level: if Yahoo/Bloomberg does not supply a core field, the app flags fixture/scaffold fallback instead of presenting it as current market data.

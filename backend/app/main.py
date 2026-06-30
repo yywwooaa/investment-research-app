@@ -53,6 +53,11 @@ elif settings.data_source.lower() == "yahoo":
     provider = YahooFinanceProvider(
         fallback=snapshot_provider,
         alpha_vantage_key=settings.alpha_vantage_api_key,
+        alpha_vantage_keys=settings.alpha_vantage_api_keys,
+        alpha_cache_path=settings.alpha_vantage_cache_path,
+        company_cache_dir=settings.company_cache_dir,
+        company_cache_ttl_seconds=settings.company_cache_ttl_seconds,
+        lazy_universe_load=settings.lazy_universe_load,
         sec_user_agent=settings.sec_user_agent,
     )
 else:

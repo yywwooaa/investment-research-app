@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import math
 import re
+import time
 from datetime import date, datetime, timezone
 from html import unescape
+from pathlib import Path
 from typing import Any
 
 from backend.app.models import (
@@ -38,31 +41,120 @@ class YahooFinanceProvider(DataProvider):
     market data.
     """
 
-    def __init__(self, fallback: SnapshotProvider, alpha_vantage_key: str = "", sec_user_agent: str = ""):
+    def __init__(
+        self,
+        fallback: SnapshotProvider,
+        alpha_vantage_key: str = "",
+        alpha_vantage_keys: str | list[str] = "",
+        alpha_cache_path: Path | str | None = None,
+        company_cache_dir: Path | str | None = None,
+        company_cache_ttl_seconds: int = 60 * 15,
+        lazy_universe_load: bool = True,
+        sec_user_agent: str = "",
+    ):
         self.fallback = fallback
-        self.public_sources = PublicSourceEnricher(alpha_vantage_key=alpha_vantage_key, sec_user_agent=sec_user_agent)
+        self.public_sources = PublicSourceEnricher(
+            alpha_vantage_key=alpha_vantage_key,
+            alpha_vantage_keys=alpha_vantage_keys,
+            alpha_cache_path=alpha_cache_path,
+            sec_user_agent=sec_user_agent,
+        )
         self._records: dict[str, CompanyRecord] | None = None
+        self._record_timestamps: dict[str, float] = {}
+        self.company_cache_dir = Path(company_cache_dir) if company_cache_dir else None
+        self.company_cache_ttl_seconds = company_cache_ttl_seconds
+        self.lazy_universe_load = lazy_universe_load
 
     def list_companies(self) -> list[CompanyRecord]:
         if self._records is None:
-            self.refresh()
+            if self.lazy_universe_load:
+                self._records = {company.profile.ticker: self._starter_record(company) for company in self.fallback.list_companies()}
+            else:
+                self.refresh()
         return list((self._records or {}).values())
 
     def get_company(self, ticker: str) -> CompanyRecord:
         key = ticker.upper().strip()
         cached = self._records.get(key) if self._records else None
-        if cached is not None:
-            record = self._fetch_company(key, cached, include_alpha=True)
-            self._records[key] = record
-            return record
+        if cached is not None and self._record_is_fresh(key):
+            return cached
+
+        disk_cached = self._load_company_cache(key)
+        if disk_cached is not None:
+            if self._records is None:
+                self._records = {}
+            self._records[key] = disk_cached
+            return disk_cached
+
         try:
             base = self.fallback.get_company(key)
         except KeyError:
-            base = None
+            base = cached
         record = self._fetch_company(key, base, include_alpha=True)
-        if self._records is not None:
-            self._records[key] = record
+        if self._records is None:
+            self._records = {}
+        self._records[key] = record
+        self._record_timestamps[key] = time.time()
+        self._store_company_cache(key, record)
         return record
+
+    def _starter_record(self, record: CompanyRecord) -> CompanyRecord:
+        warnings = [
+            *record.provenance.warnings,
+            "Starter tape loaded instantly; open a ticker or press Refresh for live Yahoo/Alpha enrichment.",
+        ]
+        provenance = record.provenance.model_copy(
+            update={
+                "quote": "Starter/cached tape",
+                "market_cap": "Starter/cached tape",
+                "financials": "Starter/cached tape",
+                "news": "Starter/cached tape",
+                "recommendation": "Starter/cached tape until ticker is opened",
+                "warnings": warnings,
+            }
+        )
+        recommendation = record.recommendation.model_copy(
+            update={"source_status": "Starter tape; open ticker for live Yahoo/Alpha refresh"}
+        )
+        return record.model_copy(update={"provenance": provenance, "recommendation": recommendation})
+
+    def _record_is_fresh(self, ticker: str) -> bool:
+        stored_at = self._record_timestamps.get(ticker.upper())
+        return stored_at is not None and time.time() - stored_at <= self.company_cache_ttl_seconds
+
+    def _company_cache_path(self, ticker: str) -> Path | None:
+        if not self.company_cache_dir:
+            return None
+        safe_ticker = re.sub(r"[^A-Z0-9._-]", "", ticker.upper())
+        return self.company_cache_dir / f"{safe_ticker}.json"
+
+    def _load_company_cache(self, ticker: str) -> CompanyRecord | None:
+        path = self._company_cache_path(ticker)
+        if not path or not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text())
+            stored_at = float(payload.get("stored_at") or 0)
+            if time.time() - stored_at > self.company_cache_ttl_seconds:
+                return None
+            record = CompanyRecord.model_validate(payload.get("record"))
+        except Exception:
+            return None
+        self._record_timestamps[ticker.upper()] = stored_at
+        return record
+
+    def _store_company_cache(self, ticker: str, record: CompanyRecord) -> None:
+        path = self._company_cache_path(ticker)
+        if not path:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_name(f"{path.name}.tmp")
+            payload = {"stored_at": time.time(), "record": record.model_dump(mode="json")}
+            temp_path.write_text(json.dumps(payload, separators=(",", ":")))
+            temp_path.replace(path)
+        except OSError:
+            return
 
     def refresh(self) -> RefreshResult:
         records: dict[str, CompanyRecord] = {}
@@ -71,6 +163,8 @@ class YahooFinanceProvider(DataProvider):
             ticker = base.profile.ticker
             try:
                 records[ticker] = self._fetch_company(ticker, base, include_alpha=False)
+                self._record_timestamps[ticker] = time.time()
+                self._store_company_cache(ticker, records[ticker])
             except Exception as exc:
                 errors.append(f"{ticker}: {exc}")
                 records[ticker] = self._unavailable_record(base, f"Yahoo Finance refresh failed: {exc}")
@@ -549,7 +643,9 @@ class YahooFinanceProvider(DataProvider):
         info: dict[str, Any],
         base: CompanyRecord | None,
     ) -> list[PeerMetric]:
-        candidates = [peer.ticker for peer in base.peers] if base and base.peers else self._peer_candidates(profile, info)
+        if base and base.peers:
+            return base.peers[:5]
+        candidates = self._peer_candidates(profile, info)
         peers: list[PeerMetric] = []
         seen = {ticker.upper()}
         for candidate in candidates:

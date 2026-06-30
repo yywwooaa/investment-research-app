@@ -1553,7 +1553,7 @@ function StockEventPanel({ company }: { company: CompanyRecord }) {
             {event.price_change_pct !== null && <em className={signalClass(event.price_change_pct)}>{formatPct(event.price_change_pct)}</em>}
           </a>
         ))}
-        {!visibleEvents.length && <p className="empty-panel-copy">Add Alpha Vantage or refresh the ticker to populate events.</p>}
+        {!visibleEvents.length && <p className="empty-panel-copy">Refresh the ticker or connect Alpha Vantage to populate event flags.</p>}
       </div>
     </div>
   );
@@ -1572,23 +1572,33 @@ function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
   const targetReturn =
     snapshot.target_price && company.market.price ? (snapshot.target_price / company.market.price - 1) * 100 : null;
   const hasAnalystTarget = targetReturn !== null;
+  const hasYahooFallback = snapshot.source.includes("Yahoo analyst summary fallback");
   const analystSourceIsConcrete = hasConcreteSource(snapshot.source);
-  const hasAnalystSignal = analystSourceIsConcrete && (totalRatings > 0 || hasAnalystTarget || snapshot.consensus !== "Unavailable");
+  const hasAnalystSignal = totalRatings > 0 || hasAnalystTarget || (hasYahooFallback && snapshot.consensus !== "Unavailable");
+  const alphaSourceIssue = !analystSourceIsConcrete && snapshot.source !== "Alpha Vantage key missing";
+  const analystDisplaySource = hasYahooFallback
+    ? "Yahoo analyst summary fallback"
+    : hasAnalystSignal
+      ? snapshot.source
+      : "Source check required";
   const analystStatus =
     snapshot.source === "Alpha Vantage key missing"
-      ? "Render is missing ALPHAVANTAGE_API_KEY. Add the key to the backend service environment and redeploy."
-      : !analystSourceIsConcrete
-        ? "Alpha Vantage returned a source message instead of analyst data. Check the Render key, redeploy status, and free-tier limits."
-        : hasAnalystTarget
-          ? "Target price loaded; full buy/hold/sell distribution was not returned."
-          : "No usable analyst sentiment was returned for this ticker.";
+      ? "Render is missing ALPHAVANTAGE_API_KEY or ALPHAVANTAGE_API_KEYS. Add the key to the backend service environment and redeploy."
+      : hasYahooFallback
+        ? "Yahoo target/consensus is loaded. Alpha Vantage is capped or unavailable, so full rating distribution is hidden."
+        : !analystSourceIsConcrete
+          ? "Alpha Vantage returned a source message instead of analyst data. Check the Render key, redeploy status, and free-tier limits."
+          : hasAnalystTarget
+            ? "Target price loaded; full buy/hold/sell distribution was not returned."
+            : "No usable analyst sentiment was returned for this ticker.";
+  const alphaDetail = hasYahooFallback && alphaSourceIssue ? snapshot.source.split("; Yahoo analyst summary fallback")[0] : "";
 
   return (
     <div className={`panel analyst-panel ${hasAnalystSignal ? "" : "source-unavailable"}`}>
       <div className="panel-heading">
         <div>
           <h3>Analyst Sentiment</h3>
-          <span>{hasAnalystSignal ? snapshot.source : "Source check required"}</span>
+          <span>{analystDisplaySource}</span>
         </div>
         <Target size={18} aria-hidden="true" />
       </div>
@@ -1623,7 +1633,10 @@ function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
               })}
             </div>
           ) : (
-            <p className="empty-panel-copy">{analystStatus}</p>
+            <div className="analyst-note">
+              <p>{analystStatus}</p>
+              {alphaDetail && <small>{alphaDetail}</small>}
+            </div>
           )}
         </>
       ) : (
@@ -1753,25 +1766,34 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
         </div>
       </div>
 
-      <div className="panel">
+      <div className="panel catalyst-risk-panel">
         <div className="panel-heading">
           <h3>Catalysts & Risks</h3>
-          <span>{company.thesis.catalysts.length} catalysts</span>
+          <span>{company.thesis.catalysts.length} catalysts / {company.thesis.risks.length} risks</span>
         </div>
-        <div className="catalyst-list">
-          {company.thesis.catalysts.map((catalyst) => (
-            <div key={`${catalyst.title}-${catalyst.timing}`} className="catalyst-row">
-              <strong>{catalyst.title}</strong>
-              <span>{catalyst.timing}</span>
-              <small>{catalyst.impact} / {catalyst.status}</small>
+        {company.thesis.catalysts.length || company.thesis.risks.length ? (
+          <>
+            <div className="catalyst-list">
+              {company.thesis.catalysts.map((catalyst) => (
+                <div key={`${catalyst.title}-${catalyst.timing}`} className="catalyst-row">
+                  <strong>{catalyst.title}</strong>
+                  <span>{catalyst.timing}</span>
+                  <small>{catalyst.impact} / {catalyst.status}</small>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <ul className="risk-list">
-          {company.thesis.risks.map((risk) => (
-            <li key={risk}>{risk}</li>
-          ))}
-        </ul>
+            <ul className="risk-list">
+              {company.thesis.risks.map((risk) => (
+                <li key={risk}>{risk}</li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <div className="empty-research-card">
+            <strong>No source-backed catalysts or risks yet</strong>
+            <p>Add only catalysts, risks, or watch items you can tie to filings, earnings dates, management commentary, or real news.</p>
+          </div>
+        )}
       </div>
     </section>
   );

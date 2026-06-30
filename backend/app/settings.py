@@ -50,6 +50,17 @@ class Settings(BaseSettings):
     smtp_from: str = Field(default="", alias="VRW_SMTP_FROM")
     smtp_tls: bool = Field(default=True, alias="VRW_SMTP_TLS")
     alpha_vantage_api_key: str = Field(default="", alias="ALPHAVANTAGE_API_KEY")
+    alpha_vantage_api_keys: str = Field(default="", alias="ALPHAVANTAGE_API_KEYS")
+    alpha_vantage_cache_path: Path = Field(
+        default=ROOT_DIR / "data" / "local" / "alpha_vantage_cache.json",
+        alias="VRW_ALPHA_VANTAGE_CACHE_PATH",
+    )
+    company_cache_dir: Path = Field(
+        default=ROOT_DIR / "data" / "local" / "company_cache",
+        alias="VRW_COMPANY_CACHE_DIR",
+    )
+    company_cache_ttl_seconds: int = Field(default=60 * 15, alias="VRW_COMPANY_CACHE_TTL_SECONDS")
+    lazy_universe_load: bool = Field(default=True, alias="VRW_LAZY_UNIVERSE_LOAD")
     sec_user_agent: str = Field(default="Variant Research Workbench contact@example.com", alias="VRW_SEC_USER_AGENT")
 
 

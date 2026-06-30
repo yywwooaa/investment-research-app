@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import csv
+import json
 import time
 from datetime import date, datetime
 from io import StringIO
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -14,15 +16,25 @@ from backend.app.models import AnalystSnapshot, EventFlag, NewsItem
 class PublicSourceEnricher:
     """Optional free/public enrichment sources for the research workbench."""
 
-    def __init__(self, alpha_vantage_key: str = "", sec_user_agent: str = "Variant Research Workbench contact@example.com"):
-        self.alpha_vantage_key = alpha_vantage_key.strip()
+    def __init__(
+        self,
+        alpha_vantage_key: str = "",
+        sec_user_agent: str = "Variant Research Workbench contact@example.com",
+        alpha_vantage_keys: str | list[str] = "",
+        alpha_cache_path: Path | str | None = None,
+    ):
+        self.alpha_vantage_keys = self._normalize_alpha_keys(alpha_vantage_key, alpha_vantage_keys)
+        self.alpha_vantage_key = self.alpha_vantage_keys[0] if self.alpha_vantage_keys else ""
         self.sec_user_agent = sec_user_agent.strip() or "Variant Research Workbench contact@example.com"
         self._ticker_cik: dict[str, str] | None = None
         self._alpha_json_cache: dict[tuple[tuple[str, str], ...], tuple[float, dict[str, Any]]] = {}
         self._alpha_text_cache: dict[tuple[tuple[str, str], ...], tuple[float, str]] = {}
+        self._alpha_file_cache: dict[str, dict[str, Any]] = {}
+        self._alpha_file_cache_loaded = False
         self._alpha_last_request_at = 0.0
-        self.alpha_cache_ttl_seconds = 60 * 60 * 6
+        self.alpha_cache_ttl_seconds = 60 * 60 * 24
         self.alpha_min_interval_seconds = 1.15
+        self.alpha_cache_path = Path(alpha_cache_path) if alpha_cache_path else None
 
     def sec_filing_events(self, ticker: str, limit: int = 8) -> list[EventFlag]:
         cik = self._cik_for_ticker(ticker)
@@ -59,7 +71,7 @@ class PublicSourceEnricher:
         return events
 
     def alpha_vantage_analyst_snapshot(self, ticker: str) -> AnalystSnapshot:
-        if not self.alpha_vantage_key:
+        if not self.alpha_vantage_keys:
             return AnalystSnapshot(source="Alpha Vantage key missing")
         data = self._alpha_json({"function": "OVERVIEW", "symbol": ticker})
         if not data:
@@ -92,7 +104,7 @@ class PublicSourceEnricher:
         )
 
     def alpha_vantage_news(self, ticker: str, limit: int = 6) -> list[NewsItem]:
-        if not self.alpha_vantage_key:
+        if not self.alpha_vantage_keys:
             return []
         data = self._alpha_json({"function": "NEWS_SENTIMENT", "tickers": ticker, "limit": str(limit)})
         feed = data.get("feed", []) if isinstance(data, dict) else []
@@ -118,7 +130,7 @@ class PublicSourceEnricher:
         return items
 
     def alpha_vantage_earnings_events(self, ticker: str, limit: int = 4) -> list[EventFlag]:
-        if not self.alpha_vantage_key:
+        if not self.alpha_vantage_keys:
             return []
         csv_text = self._alpha_text({"function": "EARNINGS_CALENDAR", "symbol": ticker, "horizon": "3month"})
         if not csv_text or "symbol" not in csv_text[:80].lower():
@@ -168,22 +180,111 @@ class PublicSourceEnricher:
             return {}
 
     @staticmethod
+    def _normalize_alpha_keys(primary_key: str, extra_keys: str | list[str]) -> list[str]:
+        values: list[str] = []
+        if primary_key:
+            values.extend(str(primary_key).split(","))
+        if isinstance(extra_keys, str):
+            values.extend(extra_keys.split(","))
+        else:
+            values.extend(str(key) for key in extra_keys if key)
+
+        keys: list[str] = []
+        for value in values:
+            key = value.strip()
+            if key and key not in keys:
+                keys.append(key)
+        return keys
+
+    @staticmethod
     def _alpha_cache_key(params: dict[str, str]) -> tuple[tuple[str, str], ...]:
         return tuple(sorted((key, str(value)) for key, value in params.items()))
 
+    @staticmethod
+    def _alpha_file_token(kind: str, key: tuple[tuple[str, str], ...]) -> str:
+        return json.dumps([kind, list(key)], separators=(",", ":"), sort_keys=True)
+
     def _fresh_alpha_json(self, key: tuple[tuple[str, str], ...]) -> dict[str, Any] | None:
         cached = self._alpha_json_cache.get(key)
-        if not cached:
-            return None
-        stored_at, payload = cached
-        return payload if time.monotonic() - stored_at <= self.alpha_cache_ttl_seconds else None
+        if cached:
+            stored_at, payload = cached
+            if time.time() - stored_at <= self.alpha_cache_ttl_seconds:
+                return payload
+
+        payload = self._fresh_alpha_file_payload("json", key)
+        if isinstance(payload, dict):
+            self._alpha_json_cache[key] = (time.time(), payload)
+            return payload
+        return None
 
     def _fresh_alpha_text(self, key: tuple[tuple[str, str], ...]) -> str | None:
         cached = self._alpha_text_cache.get(key)
-        if not cached:
+        if cached:
+            stored_at, payload = cached
+            if time.time() - stored_at <= self.alpha_cache_ttl_seconds:
+                return payload
+
+        payload = self._fresh_alpha_file_payload("text", key)
+        if isinstance(payload, str):
+            self._alpha_text_cache[key] = (time.time(), payload)
+            return payload
+        return None
+
+    def _fresh_alpha_file_payload(self, kind: str, key: tuple[tuple[str, str], ...]) -> Any | None:
+        self._load_alpha_file_cache()
+        token = self._alpha_file_token(kind, key)
+        entry = self._alpha_file_cache.get(token)
+        if not isinstance(entry, dict):
             return None
-        stored_at, payload = cached
-        return payload if time.monotonic() - stored_at <= self.alpha_cache_ttl_seconds else None
+        stored_at = self._float(entry.get("stored_at"))
+        if stored_at is None or time.time() - stored_at > self.alpha_cache_ttl_seconds:
+            return None
+        return entry.get("payload")
+
+    def _load_alpha_file_cache(self) -> None:
+        if self._alpha_file_cache_loaded:
+            return
+        self._alpha_file_cache_loaded = True
+        if not self.alpha_cache_path or not self.alpha_cache_path.exists():
+            return
+        try:
+            data = json.loads(self.alpha_cache_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return
+        if isinstance(data, dict):
+            self._alpha_file_cache = {str(key): value for key, value in data.items() if isinstance(value, dict)}
+
+    def _store_alpha_json(self, key: tuple[tuple[str, str], ...], payload: dict[str, Any]) -> None:
+        stored_at = time.time()
+        self._alpha_json_cache[key] = (stored_at, payload)
+        self._write_alpha_file_payload("json", key, payload, stored_at)
+
+    def _store_alpha_text(self, key: tuple[tuple[str, str], ...], payload: str) -> None:
+        stored_at = time.time()
+        self._alpha_text_cache[key] = (stored_at, payload)
+        self._write_alpha_file_payload("text", key, payload, stored_at)
+
+    def _write_alpha_file_payload(self, kind: str, key: tuple[tuple[str, str], ...], payload: Any, stored_at: float) -> None:
+        if not self.alpha_cache_path:
+            return
+        self._load_alpha_file_cache()
+        token = self._alpha_file_token(kind, key)
+        self._alpha_file_cache[token] = {"stored_at": stored_at, "payload": payload}
+        self._prune_alpha_file_cache(stored_at)
+        try:
+            self.alpha_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self.alpha_cache_path.with_name(f"{self.alpha_cache_path.name}.tmp")
+            temp_path.write_text(json.dumps(self._alpha_file_cache, indent=2, sort_keys=True))
+            temp_path.replace(self.alpha_cache_path)
+        except OSError:
+            return
+
+    def _prune_alpha_file_cache(self, now: float) -> None:
+        self._alpha_file_cache = {
+            token: entry
+            for token, entry in self._alpha_file_cache.items()
+            if now - (self._float(entry.get("stored_at")) or 0) <= self.alpha_cache_ttl_seconds
+        }
 
     def _wait_for_alpha_slot(self) -> None:
         elapsed = time.monotonic() - self._alpha_last_request_at
@@ -196,35 +297,86 @@ class PublicSourceEnricher:
         cached = self._fresh_alpha_json(key)
         if cached is not None:
             return cached
-        try:
-            self._wait_for_alpha_slot()
-            with httpx.Client(timeout=8) as client:
-                response = client.get("https://www.alphavantage.co/query", params={**params, "apikey": self.alpha_vantage_key})
-                response.raise_for_status()
-                payload = response.json()
-                self._alpha_json_cache[key] = (time.monotonic(), payload)
-                return payload
-        except Exception:
+        if not self.alpha_vantage_keys:
             return {}
+
+        last_payload: dict[str, Any] = {}
+        for index, api_key in enumerate(self.alpha_vantage_keys):
+            try:
+                self._wait_for_alpha_slot()
+                with httpx.Client(timeout=8) as client:
+                    response = client.get("https://www.alphavantage.co/query", params={**params, "apikey": api_key})
+                    response.raise_for_status()
+                    payload = response.json()
+            except Exception:
+                continue
+
+            if not isinstance(payload, dict):
+                continue
+            last_payload = payload
+            if self._should_try_next_alpha_key(payload) and index < len(self.alpha_vantage_keys) - 1:
+                continue
+            self._store_alpha_json(key, payload)
+            return payload
+
+        if last_payload:
+            self._store_alpha_json(key, last_payload)
+        return last_payload
 
     def _alpha_text(self, params: dict[str, str]) -> str:
         key = self._alpha_cache_key(params)
         cached = self._fresh_alpha_text(key)
         if cached is not None:
             return cached
-        try:
-            self._wait_for_alpha_slot()
-            with httpx.Client(timeout=8) as client:
-                response = client.get("https://www.alphavantage.co/query", params={**params, "apikey": self.alpha_vantage_key})
-                response.raise_for_status()
-                payload = response.text
-                self._alpha_text_cache[key] = (time.monotonic(), payload)
-                return payload
-        except Exception:
+        if not self.alpha_vantage_keys:
             return ""
 
+        last_payload = ""
+        for index, api_key in enumerate(self.alpha_vantage_keys):
+            try:
+                self._wait_for_alpha_slot()
+                with httpx.Client(timeout=8) as client:
+                    response = client.get("https://www.alphavantage.co/query", params={**params, "apikey": api_key})
+                    response.raise_for_status()
+                    payload = response.text
+            except Exception:
+                continue
+
+            last_payload = payload
+            if self._alpha_text_suggests_key_limit(payload) and index < len(self.alpha_vantage_keys) - 1:
+                continue
+            self._store_alpha_text(key, payload)
+            return payload
+
+        if last_payload:
+            self._store_alpha_text(key, last_payload)
+        return last_payload
+
+    @staticmethod
+    def _should_try_next_alpha_key(payload: dict[str, Any]) -> bool:
+        message = " ".join(str(payload.get(field) or "") for field in ("Note", "Information", "Error Message")).lower()
+        return any(
+            term in message
+            for term in (
+                "rate limit",
+                "standard api rate limit",
+                "requests per day",
+                "frequency",
+                "premium",
+                "api key",
+                "invalid",
+            )
+        )
+
+    @staticmethod
+    def _alpha_text_suggests_key_limit(payload: str) -> bool:
+        message = payload.lower()
+        return any(term in message for term in ("rate limit", "requests per day", "frequency", "premium", "api key", "invalid"))
+
     def _safe_alpha_message(self, value: Any) -> str:
-        message = str(value or "").replace(self.alpha_vantage_key, "[redacted]")
+        message = str(value or "")
+        for key in self.alpha_vantage_keys:
+            message = message.replace(key, "[redacted]")
         message = " ".join(message.split())
         return message[:220] if message else "No detail returned"
 
