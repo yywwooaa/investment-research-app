@@ -53,3 +53,44 @@ def test_sec_submissions_normalizes_filing_events():
     assert [event.category for event in events] == ["Filing", "Filing"]
     assert events[0].title == "10-Q filed"
     assert "sec.gov/Archives" in (events[0].url or "")
+
+
+def test_alpha_vantage_json_cache_reuses_payload_without_second_request():
+    enricher = PublicSourceEnricher(alpha_vantage_key="demo")
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"Symbol": "NVDA"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, _url, params):
+            calls.append(params)
+            return FakeResponse()
+
+    import backend.app.providers.public_sources as public_sources
+
+    original_client = public_sources.httpx.Client
+    enricher.alpha_min_interval_seconds = 0
+    public_sources.httpx.Client = FakeClient
+    try:
+        first = enricher._alpha_json({"function": "OVERVIEW", "symbol": "NVDA"})
+        second = enricher._alpha_json({"symbol": "NVDA", "function": "OVERVIEW"})
+    finally:
+        public_sources.httpx.Client = original_client
+
+    assert first == {"Symbol": "NVDA"}
+    assert second == first
+    assert len(calls) == 1

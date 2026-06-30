@@ -190,6 +190,29 @@ def test_yahoo_recommendation_omits_analyst_language_when_unavailable():
     assert "Analyst input included" not in recommendation.rationale
 
 
+def test_yahoo_deferred_analyst_snapshot_does_not_call_alpha_vantage():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+
+    def fail_alpha(_ticker):
+        raise AssertionError("Alpha Vantage should not be called for deferred universe rows")
+
+    provider.public_sources.alpha_vantage_analyst_snapshot = fail_alpha
+
+    snapshot = provider._build_analyst_snapshot(
+        "NVDA",
+        {
+            "targetMeanPrice": 250.25,
+            "recommendationKey": "buy",
+        },
+        include_alpha=False,
+    )
+
+    assert snapshot.target_price == 250.25
+    assert snapshot.consensus == "Buy"
+    assert snapshot.source.startswith("Alpha Vantage deferred")
+
+
 class FakeTicker:
     def __init__(self, info, income=None, cashflow=None, quarterly_income=None, quarterly_cashflow=None):
         self.info = info

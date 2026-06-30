@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import time
 from datetime import date, datetime
 from io import StringIO
 from typing import Any
@@ -17,6 +18,11 @@ class PublicSourceEnricher:
         self.alpha_vantage_key = alpha_vantage_key.strip()
         self.sec_user_agent = sec_user_agent.strip() or "Variant Research Workbench contact@example.com"
         self._ticker_cik: dict[str, str] | None = None
+        self._alpha_json_cache: dict[tuple[tuple[str, str], ...], tuple[float, dict[str, Any]]] = {}
+        self._alpha_text_cache: dict[tuple[tuple[str, str], ...], tuple[float, str]] = {}
+        self._alpha_last_request_at = 0.0
+        self.alpha_cache_ttl_seconds = 60 * 60 * 6
+        self.alpha_min_interval_seconds = 1.15
 
     def sec_filing_events(self, ticker: str, limit: int = 8) -> list[EventFlag]:
         cik = self._cik_for_ticker(ticker)
@@ -161,21 +167,59 @@ class PublicSourceEnricher:
         except Exception:
             return {}
 
+    @staticmethod
+    def _alpha_cache_key(params: dict[str, str]) -> tuple[tuple[str, str], ...]:
+        return tuple(sorted((key, str(value)) for key, value in params.items()))
+
+    def _fresh_alpha_json(self, key: tuple[tuple[str, str], ...]) -> dict[str, Any] | None:
+        cached = self._alpha_json_cache.get(key)
+        if not cached:
+            return None
+        stored_at, payload = cached
+        return payload if time.monotonic() - stored_at <= self.alpha_cache_ttl_seconds else None
+
+    def _fresh_alpha_text(self, key: tuple[tuple[str, str], ...]) -> str | None:
+        cached = self._alpha_text_cache.get(key)
+        if not cached:
+            return None
+        stored_at, payload = cached
+        return payload if time.monotonic() - stored_at <= self.alpha_cache_ttl_seconds else None
+
+    def _wait_for_alpha_slot(self) -> None:
+        elapsed = time.monotonic() - self._alpha_last_request_at
+        if elapsed < self.alpha_min_interval_seconds:
+            time.sleep(self.alpha_min_interval_seconds - elapsed)
+        self._alpha_last_request_at = time.monotonic()
+
     def _alpha_json(self, params: dict[str, str]) -> dict[str, Any]:
+        key = self._alpha_cache_key(params)
+        cached = self._fresh_alpha_json(key)
+        if cached is not None:
+            return cached
         try:
+            self._wait_for_alpha_slot()
             with httpx.Client(timeout=8) as client:
                 response = client.get("https://www.alphavantage.co/query", params={**params, "apikey": self.alpha_vantage_key})
                 response.raise_for_status()
-                return response.json()
+                payload = response.json()
+                self._alpha_json_cache[key] = (time.monotonic(), payload)
+                return payload
         except Exception:
             return {}
 
     def _alpha_text(self, params: dict[str, str]) -> str:
+        key = self._alpha_cache_key(params)
+        cached = self._fresh_alpha_text(key)
+        if cached is not None:
+            return cached
         try:
+            self._wait_for_alpha_slot()
             with httpx.Client(timeout=8) as client:
                 response = client.get("https://www.alphavantage.co/query", params={**params, "apikey": self.alpha_vantage_key})
                 response.raise_for_status()
-                return response.text
+                payload = response.text
+                self._alpha_text_cache[key] = (time.monotonic(), payload)
+                return payload
         except Exception:
             return ""
 

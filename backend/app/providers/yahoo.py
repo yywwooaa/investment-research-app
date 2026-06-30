@@ -50,13 +50,19 @@ class YahooFinanceProvider(DataProvider):
 
     def get_company(self, ticker: str) -> CompanyRecord:
         key = ticker.upper().strip()
-        if self._records and key in self._records:
-            return self._records[key]
+        cached = self._records.get(key) if self._records else None
+        if cached is not None:
+            record = self._fetch_company(key, cached, include_alpha=True)
+            self._records[key] = record
+            return record
         try:
             base = self.fallback.get_company(key)
         except KeyError:
             base = None
-        return self._fetch_company(key, base)
+        record = self._fetch_company(key, base, include_alpha=True)
+        if self._records is not None:
+            self._records[key] = record
+        return record
 
     def refresh(self) -> RefreshResult:
         records: dict[str, CompanyRecord] = {}
@@ -64,7 +70,7 @@ class YahooFinanceProvider(DataProvider):
         for base in self.fallback.list_companies():
             ticker = base.profile.ticker
             try:
-                records[ticker] = self._fetch_company(ticker, base)
+                records[ticker] = self._fetch_company(ticker, base, include_alpha=False)
             except Exception as exc:
                 errors.append(f"{ticker}: {exc}")
                 records[ticker] = self._unavailable_record(base, f"Yahoo Finance refresh failed: {exc}")
@@ -137,7 +143,7 @@ class YahooFinanceProvider(DataProvider):
             }
         )
 
-    def _fetch_company(self, ticker: str, base: CompanyRecord | None) -> CompanyRecord:
+    def _fetch_company(self, ticker: str, base: CompanyRecord | None, *, include_alpha: bool = True) -> CompanyRecord:
         import yfinance as yf
 
         yf_ticker = yf.Ticker(ticker)
@@ -152,15 +158,15 @@ class YahooFinanceProvider(DataProvider):
         market = self._build_market(info, fast_info, history, base)
         financials = self._build_financials(yf_ticker, info, base)
         yahoo_news = self._build_news(yf_ticker, ticker, profile.name)
-        alpha_news = self.public_sources.alpha_vantage_news(ticker)
+        alpha_news = self.public_sources.alpha_vantage_news(ticker) if include_alpha else []
         news = self._merge_news(yahoo_news, alpha_news)
         peers = self._build_peers(yf, ticker, profile, info, base)
         valuation = self._build_valuation(ticker, market, info, financials, base)
         thesis = self._build_thesis(ticker, profile, market, valuation, news, base)
         provenance = self._build_provenance(ticker, info, fast_info, history, base, news, market, valuation)
         price_history = self._build_price_history(history)
-        analyst_snapshot = self._build_analyst_snapshot(ticker, info)
-        event_flags = self._build_event_flags(ticker, history, news, analyst_snapshot, market)
+        analyst_snapshot = self._build_analyst_snapshot(ticker, info, include_alpha=include_alpha)
+        event_flags = self._build_event_flags(ticker, history, news, analyst_snapshot, market, include_alpha=include_alpha)
         recommendation = self._build_recommendation(ticker, market, valuation, news, thesis, provenance, analyst_snapshot)
 
         return CompanyRecord(
@@ -178,8 +184,8 @@ class YahooFinanceProvider(DataProvider):
             provenance=provenance,
         )
 
-    def _build_analyst_snapshot(self, ticker: str, info: dict[str, Any]) -> AnalystSnapshot:
-        alpha_snapshot = self.public_sources.alpha_vantage_analyst_snapshot(ticker)
+    def _build_analyst_snapshot(self, ticker: str, info: dict[str, Any], *, include_alpha: bool = True) -> AnalystSnapshot:
+        alpha_snapshot = self.public_sources.alpha_vantage_analyst_snapshot(ticker) if include_alpha else AnalystSnapshot(source="Alpha Vantage deferred until ticker is opened")
         alpha_has_ratings = any(
             value
             for value in [
@@ -648,11 +654,14 @@ class YahooFinanceProvider(DataProvider):
         news: list[NewsItem],
         analyst_snapshot: Any,
         market: MarketSnapshot,
+        *,
+        include_alpha: bool = True,
     ) -> list[EventFlag]:
         events: list[EventFlag] = []
         events.extend(self._price_move_events(history))
         events.extend(self.public_sources.sec_filing_events(ticker))
-        events.extend(self.public_sources.alpha_vantage_earnings_events(ticker))
+        if include_alpha:
+            events.extend(self.public_sources.alpha_vantage_earnings_events(ticker))
         if analyst_snapshot.target_price:
             implied = (analyst_snapshot.target_price / market.price - 1) * 100 if market.price else None
             events.append(
