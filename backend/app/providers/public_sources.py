@@ -54,10 +54,10 @@ class PublicSourceEnricher:
 
     def alpha_vantage_analyst_snapshot(self, ticker: str) -> AnalystSnapshot:
         if not self.alpha_vantage_key:
-            return AnalystSnapshot(source="Alpha Vantage not configured")
+            return AnalystSnapshot(source="Alpha Vantage key missing")
         data = self._alpha_json({"function": "OVERVIEW", "symbol": ticker})
         if not data or data.get("Note") or data.get("Information"):
-            return AnalystSnapshot(source="Alpha Vantage unavailable")
+            return AnalystSnapshot(source="Alpha Vantage key configured; no usable analyst payload")
         strong_buy = self._int(data.get("AnalystRatingStrongBuy"))
         buy = self._int(data.get("AnalystRatingBuy"))
         hold = self._int(data.get("AnalystRatingHold"))
@@ -66,7 +66,7 @@ class PublicSourceEnricher:
         target = self._float(data.get("AnalystTargetPrice"))
         consensus = self._consensus(strong_buy, buy, hold, sell, strong_sell)
         return AnalystSnapshot(
-            source="Alpha Vantage OVERVIEW",
+            source="Alpha Vantage OVERVIEW; key configured",
             target_price=target,
             strong_buy=strong_buy,
             buy=buy,

@@ -14,7 +14,7 @@ def test_alpha_vantage_overview_normalizes_analyst_snapshot():
 
     snapshot = enricher.alpha_vantage_analyst_snapshot("NVDA")
 
-    assert snapshot.source == "Alpha Vantage OVERVIEW"
+    assert snapshot.source == "Alpha Vantage OVERVIEW; key configured"
     assert snapshot.target_price == 225.5
     assert snapshot.consensus == "Buy"
     assert snapshot.buy == 10

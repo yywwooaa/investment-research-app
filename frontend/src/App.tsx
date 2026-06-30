@@ -1556,6 +1556,12 @@ function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
   const totalRatings = ratings.reduce((sum, [, value]) => sum + (value ?? 0), 0);
   const targetReturn =
     snapshot.target_price && company.market.price ? (snapshot.target_price / company.market.price - 1) * 100 : null;
+  const analystStatus =
+    snapshot.source === "Alpha Vantage key missing"
+      ? "The backend does not see ALPHAVANTAGE_API_KEY yet. Check Render environment variables, save changes, and redeploy."
+      : snapshot.source === "Alpha Vantage key configured; no usable analyst payload"
+        ? "Alpha Vantage key is configured, but the API returned no usable analyst payload. This can happen with rate limits, temporary API issues, or unsupported tickers."
+        : "Alpha Vantage is connected, but no analyst rating distribution was returned for this ticker.";
 
   return (
     <div className="panel analyst-panel">
@@ -1592,7 +1598,7 @@ function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
           );
         })}
       </div>
-      {!totalRatings && <p className="empty-panel-copy">Add `ALPHAVANTAGE_API_KEY` in Render to populate aggregated analyst ratings.</p>}
+      {!totalRatings && <p className="empty-panel-copy">{analystStatus}</p>}
     </div>
   );
 }
