@@ -124,6 +124,11 @@ function formatMultiple(value: number | null | undefined) {
   return `${formatNumber(value)}x`;
 }
 
+function hasConcreteSource(source: string | null | undefined) {
+  if (!source) return false;
+  return !/(fixture|synthetic|scaffold|unavailable|no current|not returned|empty|rate limit|api information|invalid|missing)/i.test(source);
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -809,9 +814,9 @@ export default function App() {
               <div className="header-actions">
                 <div className="price-tile">
                   <small>{company.profile.ticker}</small>
-                  <strong>{formatMoney(company.market.price)}</strong>
+                  <strong>{hasConcreteSource(company.provenance.quote) ? formatMoney(company.market.price) : "n/a"}</strong>
                   <span className={company.market.daily_change_pct >= 0 ? "positive" : "negative"}>
-                    {formatPct(company.market.daily_change_pct)}
+                    {hasConcreteSource(company.provenance.quote) ? formatPct(company.market.daily_change_pct) : "n/a"}
                   </span>
                 </div>
                 <div className={`recommendation-tile ${company.recommendation.rating.toLowerCase().replace(" ", "-")}`}>
@@ -865,12 +870,12 @@ export default function App() {
             </section>
 
             <section className="metric-grid" aria-label="Market snapshot">
-              <Metric label="Market Cap" value={`${formatNumber(company.profile.market_cap, 0)}B`} />
-              <Metric label="YTD" value={formatPct(company.market.ytd_change_pct)} tone={company.market.ytd_change_pct >= 0 ? "good" : "bad"} />
-              <Metric label="Rel. Strength" value={formatPct(company.market.relative_strength_pct)} tone={company.market.relative_strength_pct >= 0 ? "good" : "bad"} />
-              <Metric label="EV/Sales NTM" value={formatMultiple(company.market.ev_sales_ntm)} />
-              <Metric label="EV/EBITDA NTM" value={formatMultiple(company.market.ev_ebitda_ntm)} />
-              <Metric label="FCF Yield" value={formatPct(company.market.fcf_yield_pct)} />
+              <Metric label="Market Cap" value={hasConcreteSource(company.provenance.market_cap) ? `${formatNumber(company.profile.market_cap, 0)}B` : "n/a"} />
+              <Metric label="YTD" value={hasConcreteSource(company.provenance.quote) ? formatPct(company.market.ytd_change_pct) : "n/a"} tone={company.market.ytd_change_pct >= 0 ? "good" : "bad"} />
+              <Metric label="Rel. Strength" value={hasConcreteSource(company.provenance.quote) ? formatPct(company.market.relative_strength_pct) : "n/a"} tone={company.market.relative_strength_pct >= 0 ? "good" : "bad"} />
+              <Metric label="EV/Sales NTM" value={hasConcreteSource(company.provenance.financials) ? formatMultiple(company.market.ev_sales_ntm) : "n/a"} />
+              <Metric label="EV/EBITDA NTM" value={hasConcreteSource(company.provenance.financials) ? formatMultiple(company.market.ev_ebitda_ntm) : "n/a"} />
+              <Metric label="FCF Yield" value={hasConcreteSource(company.provenance.financials) ? formatPct(company.market.fcf_yield_pct) : "n/a"} />
               <Metric label="Signal Score" value={formatNumber(company.recommendation.score, 0)} />
             </section>
 
@@ -1554,12 +1559,15 @@ function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
   const totalRatings = ratings.reduce((sum, [, value]) => sum + (value ?? 0), 0);
   const targetReturn =
     snapshot.target_price && company.market.price ? (snapshot.target_price / company.market.price - 1) * 100 : null;
+  const hasAnalystTarget = targetReturn !== null;
   const analystStatus =
     snapshot.source === "Alpha Vantage key missing"
       ? "The backend does not see ALPHAVANTAGE_API_KEY yet. Check Render environment variables, save changes, and redeploy."
-      : snapshot.source === "Alpha Vantage key configured; no usable analyst payload"
-        ? "Alpha Vantage key is configured, but the API returned no usable analyst payload. This can happen with rate limits, temporary API issues, or unsupported tickers."
-        : "Alpha Vantage is connected, but no analyst rating distribution was returned for this ticker.";
+      : !hasConcreteSource(snapshot.source)
+        ? "Alpha Vantage did not return usable analyst sentiment for this ticker. Do not treat the blank distribution as Hold, Buy, or Sell."
+        : hasAnalystTarget
+          ? "No full buy/hold/sell distribution is available, so the app is using target price and consensus only."
+          : "No usable analyst sentiment was returned for this ticker.";
 
   return (
     <div className="panel analyst-panel">
@@ -1584,18 +1592,20 @@ function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
           <strong className={targetReturn === null ? "" : signalClass(targetReturn)}>{targetReturn === null ? "n/a" : formatPct(targetReturn)}</strong>
         </div>
       </div>
-      <div className="rating-bars">
-        {ratings.map(([label, value]) => {
-          const width = totalRatings ? `${Math.max(((value ?? 0) / totalRatings) * 100, value ? 4 : 0)}%` : "0%";
-          return (
-            <div key={label}>
-              <span>{label}</span>
-              <div><i style={{ width }} /></div>
-              <strong>{value ?? 0}</strong>
-            </div>
-          );
-        })}
-      </div>
+      {totalRatings > 0 && (
+        <div className="rating-bars">
+          {ratings.map(([label, value]) => {
+            const width = totalRatings ? `${Math.max(((value ?? 0) / totalRatings) * 100, value ? 4 : 0)}%` : "0%";
+            return (
+              <div key={label}>
+                <span>{label}</span>
+                <div><i style={{ width }} /></div>
+                <strong>{value ?? 0}</strong>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {!totalRatings && <p className="empty-panel-copy">{analystStatus}</p>}
     </div>
   );

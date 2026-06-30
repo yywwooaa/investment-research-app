@@ -49,7 +49,7 @@ def test_yahoo_recommendation_flags_extreme_historical_moves():
     assert "Extreme Yahoo historical move" in recommendation.negatives[0]
 
 
-def test_yahoo_recommendation_goes_under_review_with_fixture_gap():
+def test_yahoo_recommendation_goes_under_review_with_unavailable_live_fields():
     fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
     provider = YahooFinanceProvider(fallback)
     base = fallback.get_company("NVDA")
@@ -60,10 +60,10 @@ def test_yahoo_recommendation_goes_under_review_with_fixture_gap():
     provenance = provider._build_provenance("NVDA", info, fast_info, None, base, news, base.market, base.valuation)
     recommendation = provider._build_recommendation("NVDA", base.market, base.valuation, news, base.thesis, provenance)
 
-    assert provenance.market_cap == "Fixture fallback"
+    assert provenance.market_cap == "Unavailable"
     assert recommendation.rating == "Under Review"
     assert recommendation.confidence == "Low"
-    assert "core fields need validation" in recommendation.source_status
+    assert "core fields unavailable" in recommendation.source_status
 
 
 def test_yahoo_news_text_strips_html_markup():
@@ -115,7 +115,7 @@ def test_yahoo_analyst_snapshot_falls_back_to_yahoo_summary():
     fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
     provider = YahooFinanceProvider(fallback)
     provider.public_sources.alpha_vantage_analyst_snapshot = lambda _ticker: AnalystSnapshot(
-        source="Alpha Vantage key configured; no usable analyst payload"
+        source="Alpha Vantage key configured; empty OVERVIEW response"
     )
 
     snapshot = provider._build_analyst_snapshot(
@@ -129,8 +129,65 @@ def test_yahoo_analyst_snapshot_falls_back_to_yahoo_summary():
 
     assert snapshot.target_price == 250.25
     assert snapshot.consensus == "Buy"
-    assert snapshot.hold == 42
+    assert snapshot.hold is None
     assert "Yahoo analyst summary fallback" in snapshot.source
+
+
+def test_yahoo_recommendation_blends_analyst_target_into_reasoning():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+    base = fallback.get_company("AMD")
+    market = base.market.model_copy(update={"price": 100, "relative_strength_pct": 0, "ytd_change_pct": 5})
+    valuation = base.valuation.model_copy(
+        update={"base": base.valuation.base.model_copy(update={"implied_return_pct": 10})}
+    )
+    analyst = AnalystSnapshot(
+        source="Alpha Vantage OVERVIEW",
+        target_price=130,
+        consensus="Buy",
+        buy=8,
+        hold=2,
+    )
+
+    recommendation = provider._build_recommendation("AMD", market, valuation, base.news, base.thesis, None, analyst)
+
+    assert recommendation.rating == "Buy"
+    assert "blended model/analyst implied return of 17.0%" in recommendation.rationale
+    assert "analyst consensus of Buy" in recommendation.rationale
+    assert "analyst target implied return of 30.0%" in recommendation.rationale
+
+
+def test_yahoo_recommendation_majority_hold_distribution_tempers_buy():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+    base = fallback.get_company("AMD")
+    market = base.market.model_copy(update={"price": 100, "relative_strength_pct": 0, "ytd_change_pct": 5})
+    valuation = base.valuation.model_copy(
+        update={"base": base.valuation.base.model_copy(update={"implied_return_pct": 20})}
+    )
+    analyst = AnalystSnapshot(
+        source="Alpha Vantage OVERVIEW",
+        target_price=130,
+        consensus="Hold",
+        hold=15,
+    )
+
+    recommendation = provider._build_recommendation("AMD", market, valuation, base.news, base.thesis, None, analyst)
+
+    assert recommendation.rating == "Hold"
+    assert "Most available analyst ratings are Hold (15 of 15)." in recommendation.negatives
+    assert "analyst consensus of Hold" in recommendation.rationale
+
+
+def test_yahoo_recommendation_omits_analyst_language_when_unavailable():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+    base = fallback.get_company("AMD")
+
+    recommendation = provider._build_recommendation("AMD", base.market, base.valuation, base.news, base.thesis)
+
+    assert "blended model/analyst" not in recommendation.rationale
+    assert "Analyst input included" not in recommendation.rationale
 
 
 class FakeTicker:

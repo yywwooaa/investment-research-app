@@ -67,22 +67,74 @@ class YahooFinanceProvider(DataProvider):
                 records[ticker] = self._fetch_company(ticker, base)
             except Exception as exc:
                 errors.append(f"{ticker}: {exc}")
-                records[ticker] = base.model_copy(
-                    update={
-                        "recommendation": base.recommendation.model_copy(
-                            update={"source_status": "Snapshot fallback: Yahoo Finance refresh failed"}
-                        )
-                    }
-                )
+                records[ticker] = self._unavailable_record(base, f"Yahoo Finance refresh failed: {exc}")
         self._records = records
         message = "Yahoo Finance refresh completed for tracked starter list."
         if errors:
-            message += f" Snapshot fallback used for {len(errors)} ticker(s)."
+            message += f" {len(errors)} ticker(s) marked unavailable instead of using demo data."
         return RefreshResult(
             source="yahoo",
             refreshed=not errors,
             message=message,
             tickers=list(records.keys()),
+        )
+
+    def _unavailable_record(self, base: CompanyRecord, reason: str) -> CompanyRecord:
+        ticker = base.profile.ticker
+        market = MarketSnapshot(
+            price=0,
+            daily_change_pct=0,
+            ytd_change_pct=0,
+            relative_strength_pct=0,
+            ev_sales_ntm=0,
+            ev_ebitda_ntm=None,
+            pe_ntm=None,
+            fcf_yield_pct=None,
+        )
+        financial_point = FinancialPoint(period="Unavailable", revenue=0)
+        return base.model_copy(
+            update={
+                "profile": base.profile.model_copy(update={"market_cap": 0}),
+                "market": market,
+                "financials": FinancialSeries(annual=[financial_point], quarterly=[financial_point]),
+                "thesis": Thesis(
+                    ticker=ticker,
+                    stance="Under Review",
+                    one_liner="Live source data was unavailable for this refresh.",
+                    variant_view="Do not publish or rate this ticker until source-backed data loads.",
+                    evidence=[],
+                    risks=[],
+                    watch_items=["Retry Yahoo refresh", "Check Alpha Vantage status", "Validate against filings"],
+                ),
+                "valuation": self._empty_valuation(ticker, 0),
+                "peers": [],
+                "news": [],
+                "price_history": [],
+                "event_flags": [],
+                "analyst_snapshot": AnalystSnapshot(source="Unavailable"),
+                "recommendation": Recommendation(
+                    ticker=ticker,
+                    rating="Under Review",
+                    confidence="Low",
+                    score=0,
+                    rationale=f"Under Review because {reason}. No demo data was used as a substitute.",
+                    positives=[],
+                    negatives=[reason],
+                    source_status="Yahoo/yfinance unavailable; no fallback data used",
+                    updated_date=date.today(),
+                ),
+                "provenance": DataProvenance(
+                    quote="Unavailable",
+                    market_cap="Unavailable",
+                    financials="Unavailable",
+                    valuation="Unavailable until user enters DCF assumptions",
+                    news="Unavailable",
+                    thesis="Blank/user-authored research workspace",
+                    recommendation="Under Review because live source refresh failed",
+                    warnings=[reason, "No demo fixture values were used as substitutes."],
+                    refreshed_date=date.today(),
+                ),
+            }
         )
 
     def _fetch_company(self, ticker: str, base: CompanyRecord | None) -> CompanyRecord:
@@ -106,10 +158,10 @@ class YahooFinanceProvider(DataProvider):
         valuation = self._build_valuation(ticker, market, info, financials, base)
         thesis = self._build_thesis(ticker, profile, market, valuation, news, base)
         provenance = self._build_provenance(ticker, info, fast_info, history, base, news, market, valuation)
-        recommendation = self._build_recommendation(ticker, market, valuation, news, thesis, provenance)
         price_history = self._build_price_history(history)
         analyst_snapshot = self._build_analyst_snapshot(ticker, info)
         event_flags = self._build_event_flags(ticker, history, news, analyst_snapshot, market)
+        recommendation = self._build_recommendation(ticker, market, valuation, news, thesis, provenance, analyst_snapshot)
 
         return CompanyRecord(
             profile=profile,
@@ -145,17 +197,13 @@ class YahooFinanceProvider(DataProvider):
         target = self._num(info.get("targetMeanPrice"), None)
         recommendation_key = str(info.get("recommendationKey") or "").replace("_", " ").title()
         recommendation_mean = self._num(info.get("recommendationMean"), None)
-        raw_opinions = self._num(info.get("numberOfAnalystOpinions"), None)
-        number_of_opinions = int(raw_opinions) if raw_opinions is not None else None
-        if not target and not recommendation_key and not recommendation_mean and not number_of_opinions:
+        if not target and not recommendation_key and not recommendation_mean:
             return alpha_snapshot
 
         consensus = recommendation_key or self._consensus_from_recommendation_mean(recommendation_mean)
-        hold_count = number_of_opinions if number_of_opinions is not None else None
         return AnalystSnapshot(
             source=f"{alpha_snapshot.source}; Yahoo analyst summary fallback",
             target_price=target,
-            hold=hold_count,
             consensus=consensus or "Yahoo Summary",
         )
 
@@ -276,7 +324,7 @@ class YahooFinanceProvider(DataProvider):
             name=info.get("longName") or info.get("shortName") or (base.profile.name if base else ticker),
             sector=info.get("sector") or (base.profile.sector if base else "Unknown"),
             industry=info.get("industry") or (base.profile.industry if base else "Unknown"),
-            market_cap=(market_cap / 1_000_000_000) if market_cap else (base.profile.market_cap if base else 0),
+            market_cap=(market_cap / 1_000_000_000) if market_cap else 0,
             currency=info.get("financialCurrency") or info.get("currency") or (base.profile.currency if base else "USD"),
             description=info.get("longBusinessSummary") or (base.profile.description if base else "Yahoo Finance profile loaded."),
         )
@@ -295,11 +343,11 @@ class YahooFinanceProvider(DataProvider):
         if previous_close is None and history is not None and len(history) > 1:
             previous_close = self._num(history["Close"].iloc[-2], None)
         if price is None:
-            price = base.market.price if base else 0
+            price = 0
 
         daily_change = ((price / previous_close - 1) * 100) if price and previous_close else 0
-        ytd_change = base.market.ytd_change_pct if base else 0
-        relative_strength = base.market.relative_strength_pct if base else 0
+        ytd_change = 0
+        relative_strength = 0
         if history is not None and not history.empty:
             year_start_rows = history[history.index >= f"{date.today().year}-01-01"]
             if not year_start_rows.empty:
@@ -314,16 +362,14 @@ class YahooFinanceProvider(DataProvider):
         ebitda = self._num(info.get("ebitda"), None)
         ev_sales_raw = enterprise_value / revenue if enterprise_value and revenue else None
         ev_ebitda_raw = enterprise_value / ebitda if enterprise_value and ebitda else None
-        ev_sales = self._reasonable(ev_sales_raw, base.market.ev_sales_ntm if base else 0, upper=80)
-        ev_ebitda = self._reasonable(ev_ebitda_raw, base.market.ev_ebitda_ntm if base else None, upper=150)
-        pe = self._num(info.get("forwardPE"), base.market.pe_ntm if base else None)
+        ev_sales = self._reasonable(ev_sales_raw, 0, upper=80) or 0
+        ev_ebitda = self._reasonable(ev_ebitda_raw, None, upper=150)
+        pe = self._num(info.get("forwardPE"), None)
         fcf_yield = None
         free_cashflow = self._num(info.get("freeCashflow"), None)
         if free_cashflow and market_cap:
             fcf_yield = free_cashflow / market_cap * 100
-        elif base:
-            fcf_yield = base.market.fcf_yield_pct
-        fcf_yield = self._reasonable(fcf_yield, base.market.fcf_yield_pct if base else None, lower=-25, upper=25)
+        fcf_yield = self._reasonable(fcf_yield, None, lower=-25, upper=25)
 
         return MarketSnapshot(
             price=price,
@@ -401,10 +447,10 @@ class YahooFinanceProvider(DataProvider):
         return FinancialPoint(
             period="Yahoo TTM",
             revenue=revenue / 1_000_000_000,
-            ebitda=(ebitda / 1_000_000_000) if ebitda else (fallback.ebitda if fallback else None),
-            ebitda_margin_pct=(ebitda / revenue * 100) if ebitda else (fallback.ebitda_margin_pct if fallback else None),
-            fcf=(fcf / 1_000_000_000) if fcf else (fallback.fcf if fallback else None),
-            eps=self._num(info.get("trailingEps"), fallback.eps if fallback else None),
+            ebitda=(ebitda / 1_000_000_000) if ebitda else None,
+            ebitda_margin_pct=(ebitda / revenue * 100) if ebitda else None,
+            fcf=(fcf / 1_000_000_000) if fcf else None,
+            eps=self._num(info.get("trailingEps"), None),
         )
 
     def _build_financials(self, yf_ticker: Any, info: dict[str, Any], base: CompanyRecord | None) -> FinancialSeries:
@@ -421,13 +467,6 @@ class YahooFinanceProvider(DataProvider):
             if ttm and (not annual or annual[-1].period != "Yahoo TTM"):
                 annual = [*annual[-4:], ttm]
             return FinancialSeries(annual=annual, quarterly=quarterly or annual[-4:])
-
-        if base:
-            if ttm:
-                annual = list(base.financials.annual)
-                annual[-1] = ttm
-                return FinancialSeries(annual=annual, quarterly=base.financials.quarterly)
-            return base.financials
 
         point = ttm or FinancialPoint(period="Yahoo TTM", revenue=0, eps=self._num(info.get("trailingEps"), None))
         return FinancialSeries(annual=[point], quarterly=[point])
@@ -504,9 +543,7 @@ class YahooFinanceProvider(DataProvider):
         info: dict[str, Any],
         base: CompanyRecord | None,
     ) -> list[PeerMetric]:
-        fallback_peers = base.peers if base and base.peers else []
-        fallback_by_ticker = {peer.ticker.upper(): peer for peer in fallback_peers}
-        candidates = [peer.ticker for peer in fallback_peers] or self._peer_candidates(profile, info)
+        candidates = [peer.ticker for peer in base.peers] if base and base.peers else self._peer_candidates(profile, info)
         peers: list[PeerMetric] = []
         seen = {ticker.upper()}
         for candidate in candidates:
@@ -516,14 +553,10 @@ class YahooFinanceProvider(DataProvider):
             seen.add(normalized)
             metric = self._fetch_peer_metric(yf, normalized)
             if metric is not None:
-                if metric.ev_sales_ntm <= 0 and fallback_by_ticker.get(normalized):
-                    metric = fallback_by_ticker[normalized]
                 peers.append(metric)
-            elif fallback_by_ticker.get(normalized):
-                peers.append(fallback_by_ticker[normalized])
             if len(peers) >= 5:
                 break
-        return peers or fallback_peers
+        return peers
 
     def _build_news(self, yf_ticker: Any, ticker: str, company_name: str) -> list[NewsItem]:
         try:
@@ -798,53 +831,62 @@ class YahooFinanceProvider(DataProvider):
         financials: FinancialSeries,
         base: CompanyRecord | None,
     ) -> ScenarioValuation:
-        if base:
-            base_case = base.valuation
-        else:
-            base_case = ScenarioValuation(
-                ticker=ticker,
-                base_year_revenue=financials.annual[-1].revenue,
-                net_cash_debt=0,
-                diluted_shares=0,
-                bull=ScenarioAssumption(
-                    revenue_cagr_pct=12,
-                    terminal_margin_pct=20,
-                    exit_multiple=max(market.ev_sales_ntm + 2, 1),
-                    discount_rate_pct=10,
-                    implied_price=market.price * 1.25,
-                    implied_return_pct=25,
-                ),
-                base=ScenarioAssumption(
-                    revenue_cagr_pct=6,
-                    terminal_margin_pct=16,
-                    exit_multiple=max(market.ev_sales_ntm, 1),
-                    discount_rate_pct=10.5,
-                    implied_price=market.price,
-                    implied_return_pct=0,
-                ),
-                bear=ScenarioAssumption(
-                    revenue_cagr_pct=0,
-                    terminal_margin_pct=10,
-                    exit_multiple=max(market.ev_sales_ntm - 2, 1),
-                    discount_rate_pct=11.5,
-                    implied_price=market.price * 0.8,
-                    implied_return_pct=-20,
-                ),
-                notes="Yahoo Finance live-data scaffold. Refine assumptions manually before publishing.",
-            )
+        base_revenue = financials.annual[-1].revenue if financials.annual else 0
         target_mean = self._num(info.get("targetMeanPrice"), None)
         if target_mean and market.price:
-            base_return = (target_mean / market.price - 1) * 100
-            return base_case.model_copy(
-                update={
-                    "base": base_case.base.model_copy(update={"implied_price": target_mean, "implied_return_pct": base_return}),
-                    "bull": base_case.bull.model_copy(update={"implied_price": target_mean * 1.15, "implied_return_pct": (target_mean * 1.15 / market.price - 1) * 100}),
-                    "bear": base_case.bear.model_copy(update={"implied_price": target_mean * 0.8, "implied_return_pct": (target_mean * 0.8 / market.price - 1) * 100}),
-                    "notes": "Yahoo Finance source: target mean price and live market/fundamental fields where available.",
-                    "updated_date": date.today(),
-                }
+            return self._target_price_valuation(ticker, base_revenue, target_mean, market.price)
+        return self._empty_valuation(ticker, base_revenue)
+
+    @staticmethod
+    def _scenario_from_price(price: float, current_price: float) -> ScenarioAssumption:
+        implied_return = (price / current_price - 1) * 100 if current_price else 0
+        return ScenarioAssumption(
+            revenue_cagr_pct=0,
+            terminal_margin_pct=0,
+            exit_multiple=0,
+            discount_rate_pct=0,
+            implied_price=round(price, 2),
+            implied_return_pct=implied_return,
+        )
+
+    def _target_price_valuation(self, ticker: str, base_revenue: float, target_price: float, current_price: float) -> ScenarioValuation:
+        return ScenarioValuation(
+            ticker=ticker,
+            base_year_revenue=base_revenue,
+            net_cash_debt=0,
+            diluted_shares=0,
+            bull=self._scenario_from_price(target_price * 1.15, current_price),
+            base=self._scenario_from_price(target_price, current_price),
+            bear=self._scenario_from_price(target_price * 0.8, current_price),
+            notes=(
+                "Yahoo Finance target mean price loaded. This is not a DCF; edit the valuation workspace "
+                "with your own assumptions before publishing."
+            ),
+            updated_date=date.today(),
+        )
+
+    @staticmethod
+    def _empty_valuation(ticker: str, base_revenue: float) -> ScenarioValuation:
+        empty_case = ScenarioAssumption(
+            revenue_cagr_pct=0,
+            terminal_margin_pct=0,
+            exit_multiple=0,
+            discount_rate_pct=0,
+            implied_price=0,
+            implied_return_pct=0,
+        )
+        return ScenarioValuation(
+            ticker=ticker,
+            base_year_revenue=base_revenue,
+            net_cash_debt=0,
+            diluted_shares=0,
+            bull=empty_case,
+            base=empty_case,
+            bear=empty_case,
+            notes=(
+                "No sourced valuation target is loaded. Enter DCF assumptions manually or connect a licensed/source-backed target."
             )
-        return base_case.model_copy(update={"ticker": ticker, "updated_date": date.today()})
+        )
 
     def _build_thesis(
         self,
@@ -855,28 +897,28 @@ class YahooFinanceProvider(DataProvider):
         news: list[NewsItem],
         base: CompanyRecord | None,
     ) -> Thesis:
-        if base:
-            thesis = base.thesis
-        else:
-            thesis = Thesis(
-                ticker=ticker,
-                stance="Under Review",
-                one_liner=f"{profile.name} is loaded from Yahoo Finance for initial research review.",
-                variant_view="Build the differentiated view after reviewing financials, valuation, news, and filings.",
-                evidence=[],
-                risks=[],
-                watch_items=["Review Yahoo Finance news", "Check SEC filings", "Build peer set", "Refine valuation cases"],
-            )
+        thesis = Thesis(
+            ticker=ticker,
+            stance="Under Review",
+            one_liner=f"{profile.name} is loaded for source-backed research review.",
+            variant_view="Build the differentiated view after reviewing source-backed financials, valuation, news, and filings.",
+            evidence=[],
+            risks=[],
+            watch_items=["Review Yahoo Finance quote/news", "Check SEC filings", "Build peer set", "Refine valuation cases"],
+        )
+        evidence: list[str] = []
+        if market.ytd_change_pct:
+            evidence.append(f"YTD performance: {market.ytd_change_pct:.1f}%.")
+        if market.ev_sales_ntm:
+            evidence.append(f"EV/Sales: {market.ev_sales_ntm:.1f}x.")
+        real_news_count = sum(1 for item in news if not item.title.startswith("No ticker-specific Yahoo Finance news returned"))
+        if real_news_count:
+            evidence.append(f"Recent source-backed news items loaded: {real_news_count}.")
         return thesis.model_copy(
             update={
                 "ticker": ticker,
                 "updated_date": date.today(),
-                "evidence": thesis.evidence
-                or [
-                    f"YTD performance: {market.ytd_change_pct:.1f}%.",
-                    f"EV/Sales: {market.ev_sales_ntm:.1f}x.",
-                    f"Recent news items loaded: {len(news)}.",
-                ],
+                "evidence": evidence,
             }
         )
 
@@ -898,8 +940,6 @@ class YahooFinanceProvider(DataProvider):
             quote_source = "Yahoo Finance fast quote"
         elif history is not None:
             quote_source = "Yahoo Finance latest historical close"
-        elif base:
-            quote_source = "Fixture fallback"
 
         market_cap_source = "Unavailable"
         if self._first_num(info.get("marketCap"), info.get("market_cap")) is not None:
@@ -914,33 +954,27 @@ class YahooFinanceProvider(DataProvider):
             fast_info.get("sharesOutstanding"),
         ) is not None and self._quote_value(info, fast_info) is not None:
             market_cap_source = "Yahoo shares outstanding x quote"
-        elif base:
-            market_cap_source = "Fixture fallback"
 
         financials_source = "Yahoo Finance TTM fundamentals" if self._num(info.get("totalRevenue"), None) else "Unavailable"
-        if financials_source == "Unavailable" and base:
-            financials_source = "Fixture financial series"
 
         if self._num(info.get("targetMeanPrice"), None):
-            valuation_source = "Yahoo analyst target mean; scenarios generated by app"
-        elif base:
-            valuation_source = "Fixture scenario scaffold"
+            valuation_source = "Yahoo analyst target mean; not a DCF"
         else:
-            valuation_source = "App-generated scenario scaffold"
+            valuation_source = "Unavailable until user enters DCF assumptions"
 
         has_real_news = bool(news) and not news[0].title.startswith("No ticker-specific Yahoo Finance news returned")
         news_source = "Yahoo Finance ticker news" if has_real_news else "No current Yahoo ticker news returned"
-        thesis_source = "Fixture thesis scaffold, user-editable" if base else "App intake thesis scaffold, user-editable"
+        thesis_source = "Blank/user-authored research workspace"
 
         warnings: list[str] = [
             "Yahoo/yfinance is a free unofficial source; validate figures against filings or a licensed feed before publishing."
         ]
-        if "Fixture" in market_cap_source:
-            warnings.append(f"{ticker} market cap is using a fixture fallback, not the current Yahoo market cap.")
-        if "Fixture" in financials_source:
-            warnings.append(f"{ticker} financial series is using fixture data where Yahoo fundamentals were unavailable.")
-        if "Fixture" in valuation_source or "scaffold" in valuation_source.lower():
-            warnings.append(f"{ticker} valuation/recommendation relies on scaffold assumptions until you edit the cases.")
+        if market_cap_source == "Unavailable":
+            warnings.append(f"{ticker} market cap was not returned by the live source.")
+        if financials_source == "Unavailable":
+            warnings.append(f"{ticker} financial series was not returned by the live source.")
+        if "Unavailable" in valuation_source:
+            warnings.append(f"{ticker} valuation/recommendation needs user-entered DCF assumptions or a sourced analyst target.")
         if not has_real_news:
             warnings.append("Yahoo did not return clearly ticker-specific recent news for this request.")
         if abs(market.relative_strength_pct) > 500 or abs(market.ytd_change_pct) > 500:
@@ -968,8 +1002,43 @@ class YahooFinanceProvider(DataProvider):
         news: list[NewsItem],
         thesis: Thesis,
         provenance: DataProvenance | None = None,
+        analyst_snapshot: AnalystSnapshot | None = None,
     ) -> Recommendation:
         implied_return = valuation.base.implied_return_pct
+        analyst_return = (
+            (analyst_snapshot.target_price / market.price - 1) * 100
+            if analyst_snapshot and analyst_snapshot.target_price and market.price
+            else None
+        )
+        has_rating_distribution = bool(
+            analyst_snapshot
+            and any(
+                value
+                for value in [
+                    analyst_snapshot.strong_buy,
+                    analyst_snapshot.buy,
+                    analyst_snapshot.hold,
+                    analyst_snapshot.sell,
+                    analyst_snapshot.strong_sell,
+                ]
+            )
+        )
+        rating_total = 0
+        hold_ratio = 0.0
+        if has_rating_distribution and analyst_snapshot:
+            rating_total = sum(
+                value or 0
+                for value in [
+                    analyst_snapshot.strong_buy,
+                    analyst_snapshot.buy,
+                    analyst_snapshot.hold,
+                    analyst_snapshot.sell,
+                    analyst_snapshot.strong_sell,
+                ]
+            )
+            hold_ratio = ((analyst_snapshot.hold or 0) / rating_total) if rating_total else 0.0
+        analyst_consensus = analyst_snapshot.consensus if analyst_snapshot and analyst_snapshot.consensus != "Unavailable" else ""
+        analyst_is_usable = analyst_return is not None or has_rating_distribution or bool(analyst_consensus)
         data_quality_warning = abs(market.relative_strength_pct) > 500 or abs(market.ytd_change_pct) > 500
         fallback_gap = False
         if provenance is not None:
@@ -979,25 +1048,41 @@ class YahooFinanceProvider(DataProvider):
                 for marker in ["fixture", "unavailable", "scaffold"]
             )
         bounded_relative_strength = min(100, max(-100, market.relative_strength_pct))
-        score = min(100, max(0, 50 + implied_return * 1.1 + bounded_relative_strength * 0.05))
-        if implied_return >= 15:
+        blended_return = implied_return
+        if analyst_return is not None:
+            blended_return = implied_return * 0.65 + analyst_return * 0.35
+        score = min(100, max(0, 50 + blended_return * 1.1 + bounded_relative_strength * 0.05))
+        consensus_key = analyst_consensus.lower()
+        if blended_return >= 15 and consensus_key not in {"sell", "strong sell", "underperform"}:
             rating = "Buy"
-        elif implied_return <= -10:
+        elif blended_return <= -10 or consensus_key in {"sell", "strong sell"}:
             rating = "Sell"
         else:
             rating = "Hold"
-        confidence = "Medium" if abs(implied_return) >= 10 and market.price > 0 else "Low"
+        if analyst_consensus.lower() in {"hold", "neutral"} and rating == "Buy" and blended_return < 20:
+            rating = "Hold"
+        if has_rating_distribution and hold_ratio >= 0.6 and rating == "Buy":
+            rating = "Hold"
+        confidence = "Medium" if abs(blended_return) >= 10 and market.price > 0 else "Low"
         if data_quality_warning:
             confidence = "Low"
         if fallback_gap or data_quality_warning:
             rating = "Under Review"
             confidence = "Low"
             score = min(score, 55)
-        positives = thesis.evidence[:3] or [f"Base-case implied return is {implied_return:.1f}%."]
+        positives = thesis.evidence[:3] or []
+        if analyst_return is not None and analyst_return > 0:
+            positives = [f"Analyst target implies {analyst_return:.1f}% upside.", *positives]
         negatives = thesis.risks[:3] or ["Free data source; validate against filings and company materials before publishing."]
+        if analyst_consensus.lower() in {"hold", "neutral"}:
+            negatives = [f"Analyst consensus is {analyst_consensus}, which tempers the model signal.", *negatives]
+        if has_rating_distribution and hold_ratio >= 0.6:
+            negatives = [f"Most available analyst ratings are Hold ({analyst_snapshot.hold or 0} of {rating_total}).", *negatives]
+        if analyst_return is not None and analyst_return < 0:
+            negatives = [f"Analyst target implies {abs(analyst_return):.1f}% downside.", *negatives]
         if fallback_gap:
             negatives = [
-                "Some core fields use fixture/scaffold fallback; validate live market cap, financials, and valuation before assigning a rating.",
+                "Some core fields are unavailable; validate live market cap, financials, and valuation before assigning a rating.",
                 *negatives,
             ]
         if data_quality_warning:
@@ -1005,23 +1090,44 @@ class YahooFinanceProvider(DataProvider):
                 "Extreme Yahoo historical move detected; validate splits, corporate actions, and quote source before using momentum.",
                 *negatives,
             ]
-        source_status = "Yahoo/yfinance where available; fallback/scaffold fields are flagged in Data Provenance"
+        source_status = "Yahoo/yfinance where available; unavailable fields keep the rating Under Review"
         if fallback_gap:
-            source_status += "; data-quality warning: core fields need validation"
+            source_status += "; data-quality warning: core fields unavailable"
         if data_quality_warning:
             source_status += "; data-quality warning: extreme historical move requires validation"
         news_summary = self._summarize_news_flow(news)
+        analyst_phrase = ""
+        if analyst_is_usable:
+            parts = []
+            if analyst_consensus:
+                parts.append(f"analyst consensus of {analyst_consensus}")
+            if analyst_return is not None:
+                parts.append(f"analyst target implied return of {analyst_return:.1f}%")
+            if has_rating_distribution:
+                distribution = {
+                    "strong buy": analyst_snapshot.strong_buy or 0,
+                    "buy": analyst_snapshot.buy or 0,
+                    "hold": analyst_snapshot.hold or 0,
+                    "sell": analyst_snapshot.sell or 0,
+                    "strong sell": analyst_snapshot.strong_sell or 0,
+                }
+                parts.append("rating distribution " + "/".join(f"{label} {value}" for label, value in distribution.items() if value))
+            analyst_phrase = " Analyst input included " + ", ".join(parts) + "."
         if rating == "Under Review":
             rationale = (
                 "Under Review because the app detected source gaps or data-quality warnings. "
-                f"Current scaffold shows base-case implied return of {implied_return:.1f}%, "
-                f"relative strength of {market.relative_strength_pct:.1f}%. {news_summary}"
+                f"Current source view shows base-case implied return of {implied_return:.1f}%, "
+                f"relative strength of {market.relative_strength_pct:.1f}%.{analyst_phrase} {news_summary}"
             )
         else:
+            return_phrase = (
+                f"blended model/analyst implied return of {blended_return:.1f}% (model {implied_return:.1f}%)"
+                if analyst_return is not None
+                else f"model implied return of {implied_return:.1f}%"
+            )
             rationale = (
-                f"{rating} based on Yahoo Finance market data, base-case implied return of "
-                f"{implied_return:.1f}%, relative strength of {market.relative_strength_pct:.1f}%, "
-                f"and the latest news context. {news_summary}"
+                f"{rating} based on Yahoo Finance market data, {return_phrase}, relative strength of {market.relative_strength_pct:.1f}%, "
+                f"and the latest news context.{analyst_phrase} {news_summary}"
             )
         return Recommendation(
             ticker=ticker,
