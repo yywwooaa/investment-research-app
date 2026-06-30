@@ -2,7 +2,7 @@ from datetime import date
 
 import pandas as pd
 
-from backend.app.models import NewsItem
+from backend.app.models import AnalystSnapshot, NewsItem
 from backend.app.providers.snapshot import SnapshotProvider
 from backend.app.providers.yahoo import YahooFinanceProvider
 from backend.app.settings import ROOT_DIR
@@ -109,6 +109,28 @@ def test_yahoo_recommendation_rationale_summarizes_news_flow():
     assert "Recent news flow looks mixed" in recommendation.rationale
     assert "AMD shares rise after analyst upgrade" in recommendation.rationale
     assert "stronger demand signals" in recommendation.rationale
+
+
+def test_yahoo_analyst_snapshot_falls_back_to_yahoo_summary():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+    provider.public_sources.alpha_vantage_analyst_snapshot = lambda _ticker: AnalystSnapshot(
+        source="Alpha Vantage key configured; no usable analyst payload"
+    )
+
+    snapshot = provider._build_analyst_snapshot(
+        "NVDA",
+        {
+            "targetMeanPrice": 250.25,
+            "recommendationKey": "buy",
+            "numberOfAnalystOpinions": 42,
+        },
+    )
+
+    assert snapshot.target_price == 250.25
+    assert snapshot.consensus == "Buy"
+    assert snapshot.hold == 42
+    assert "Yahoo analyst summary fallback" in snapshot.source
 
 
 class FakeTicker:

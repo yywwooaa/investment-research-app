@@ -874,8 +874,6 @@ export default function App() {
               <Metric label="Signal Score" value={formatNumber(company.recommendation.score, 0)} />
             </section>
 
-            <DataQualityPanel company={company} />
-
             <nav className="tab-strip" aria-label="Workbench tabs">
               {tabs.map((tab) => (
                 <button

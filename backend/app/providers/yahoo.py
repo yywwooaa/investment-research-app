@@ -13,6 +13,7 @@ from backend.app.models import (
     EventFlag,
     FinancialPoint,
     FinancialSeries,
+    AnalystSnapshot,
     MarketSnapshot,
     NewsItem,
     PeerMetric,
@@ -107,7 +108,7 @@ class YahooFinanceProvider(DataProvider):
         provenance = self._build_provenance(ticker, info, fast_info, history, base, news, market, valuation)
         recommendation = self._build_recommendation(ticker, market, valuation, news, thesis, provenance)
         price_history = self._build_price_history(history)
-        analyst_snapshot = self.public_sources.alpha_vantage_analyst_snapshot(ticker)
+        analyst_snapshot = self._build_analyst_snapshot(ticker, info)
         event_flags = self._build_event_flags(ticker, history, news, analyst_snapshot, market)
 
         return CompanyRecord(
@@ -124,6 +125,51 @@ class YahooFinanceProvider(DataProvider):
             recommendation=recommendation,
             provenance=provenance,
         )
+
+    def _build_analyst_snapshot(self, ticker: str, info: dict[str, Any]) -> AnalystSnapshot:
+        alpha_snapshot = self.public_sources.alpha_vantage_analyst_snapshot(ticker)
+        alpha_has_ratings = any(
+            value
+            for value in [
+                alpha_snapshot.strong_buy,
+                alpha_snapshot.buy,
+                alpha_snapshot.hold,
+                alpha_snapshot.sell,
+                alpha_snapshot.strong_sell,
+                alpha_snapshot.target_price,
+            ]
+        )
+        if alpha_has_ratings:
+            return alpha_snapshot
+
+        target = self._num(info.get("targetMeanPrice"), None)
+        recommendation_key = str(info.get("recommendationKey") or "").replace("_", " ").title()
+        recommendation_mean = self._num(info.get("recommendationMean"), None)
+        raw_opinions = self._num(info.get("numberOfAnalystOpinions"), None)
+        number_of_opinions = int(raw_opinions) if raw_opinions is not None else None
+        if not target and not recommendation_key and not recommendation_mean and not number_of_opinions:
+            return alpha_snapshot
+
+        consensus = recommendation_key or self._consensus_from_recommendation_mean(recommendation_mean)
+        hold_count = number_of_opinions if number_of_opinions is not None else None
+        return AnalystSnapshot(
+            source=f"{alpha_snapshot.source}; Yahoo analyst summary fallback",
+            target_price=target,
+            hold=hold_count,
+            consensus=consensus or "Yahoo Summary",
+        )
+
+    @staticmethod
+    def _consensus_from_recommendation_mean(value: float | None) -> str:
+        if value is None:
+            return ""
+        if value <= 1.8:
+            return "Buy"
+        if value <= 2.6:
+            return "Hold"
+        if value <= 3.5:
+            return "Underperform"
+        return "Sell"
 
     @staticmethod
     def _safe_info(yf_ticker: Any) -> dict[str, Any]:
