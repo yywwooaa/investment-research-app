@@ -20,6 +20,20 @@ def test_alpha_vantage_overview_normalizes_analyst_snapshot():
     assert snapshot.buy == 10
 
 
+def test_alpha_vantage_information_message_is_preserved_and_redacted():
+    enricher = PublicSourceEnricher(alpha_vantage_key="SECRET123")
+    enricher._alpha_json = lambda _params: {
+        "Information": "Key SECRET123 is not valid for this request. Please check your Alpha Vantage API key."
+    }
+
+    snapshot = enricher.alpha_vantage_analyst_snapshot("NVDA")
+
+    assert snapshot.consensus == "Unavailable"
+    assert snapshot.source.startswith("Alpha Vantage information:")
+    assert "[redacted]" in snapshot.source
+    assert "SECRET123" not in snapshot.source
+
+
 def test_sec_submissions_normalizes_filing_events():
     enricher = PublicSourceEnricher()
     enricher._ticker_cik = {"NVDA": "0001045810"}

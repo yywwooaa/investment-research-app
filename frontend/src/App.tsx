@@ -126,7 +126,7 @@ function formatMultiple(value: number | null | undefined) {
 
 function hasConcreteSource(source: string | null | undefined) {
   if (!source) return false;
-  return !/(fixture|synthetic|scaffold|unavailable|no current|not returned|empty|rate limit|api information|invalid|missing)/i.test(source);
+  return !/(fixture|synthetic|scaffold|unavailable|no current|not returned|empty|rate limit|api information|alpha vantage information|alpha vantage note|alpha vantage error|invalid|missing)/i.test(source);
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -777,8 +777,8 @@ export default function App() {
           <>
             <section className="research-command">
               <div>
-                <span className="eyebrow">Equity research workflow</span>
-                <h2>Type a ticker, pressure-test the thesis, save the idea.</h2>
+                <span className="eyebrow">Research desk</span>
+                <h2>Public equity research workbench.</h2>
               </div>
               <TickerSearch
                 surface="command"
@@ -798,8 +798,6 @@ export default function App() {
                 buttonIconSize={16}
               />
             </section>
-
-            <MarketDeskOverview desk={marketDesk} trending={trendingRows} onOpen={(ticker) => void openTicker(ticker)} />
 
             <header className="company-header">
               <div>
@@ -843,31 +841,45 @@ export default function App() {
 
             <TopRecommendationPanel company={company} />
 
-            <section className="idea-note-panel">
-              <div>
-                <span className="eyebrow">Saved idea note</span>
-                <p>{selectedSavedIdea ? "Capture why this name deserves follow-up." : "Bookmark this ticker and write the variant angle you want to revisit."}</p>
-              </div>
-              <select
-                aria-label="Idea priority"
-                value={ideaPriority}
-                onChange={(event) => setIdeaPriority(event.target.value as SavedIdea["priority"])}
-              >
-                <option>High</option>
-                <option>Medium</option>
-                <option>Low</option>
-              </select>
-              <textarea
-                rows={2}
-                value={ideaNote}
-                onChange={(event) => setIdeaNote(event.target.value)}
-                placeholder="Why this could work, what you need to verify, or what would change your mind..."
-              />
-              <button className="secondary-button" type="button" onClick={() => void saveCurrentIdea()} disabled={isBusy}>
-                <Save size={16} aria-hidden="true" />
-                Save note
-              </button>
-            </section>
+            <details className="market-context-drawer">
+              <summary>
+                <span>Market context</span>
+                <small>Saved ideas, movers, and trending tape</small>
+              </summary>
+              <MarketDeskOverview desk={marketDesk} trending={trendingRows} onOpen={(ticker) => void openTicker(ticker)} />
+            </details>
+
+            <details className="idea-note-drawer">
+              <summary>
+                <span>Saved idea note</span>
+                <small>{selectedSavedIdea ? "Saved to your watchlist" : "Add this ticker to your saved ideas"}</small>
+              </summary>
+              <section className="idea-note-panel">
+                <div>
+                  <span className="eyebrow">Saved idea note</span>
+                  <p>{selectedSavedIdea ? "Capture why this name deserves follow-up." : "Bookmark this ticker and write the variant angle you want to revisit."}</p>
+                </div>
+                <select
+                  aria-label="Idea priority"
+                  value={ideaPriority}
+                  onChange={(event) => setIdeaPriority(event.target.value as SavedIdea["priority"])}
+                >
+                  <option>High</option>
+                  <option>Medium</option>
+                  <option>Low</option>
+                </select>
+                <textarea
+                  rows={2}
+                  value={ideaNote}
+                  onChange={(event) => setIdeaNote(event.target.value)}
+                  placeholder="Why this could work, what you need to verify, or what would change your mind..."
+                />
+                <button className="secondary-button" type="button" onClick={() => void saveCurrentIdea()} disabled={isBusy}>
+                  <Save size={16} aria-hidden="true" />
+                  Save note
+                </button>
+              </section>
+            </details>
 
             <section className="metric-grid" aria-label="Market snapshot">
               <Metric label="Market Cap" value={hasConcreteSource(company.provenance.market_cap) ? `${formatNumber(company.profile.market_cap, 0)}B` : "n/a"} />
@@ -1560,53 +1572,70 @@ function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
   const targetReturn =
     snapshot.target_price && company.market.price ? (snapshot.target_price / company.market.price - 1) * 100 : null;
   const hasAnalystTarget = targetReturn !== null;
+  const analystSourceIsConcrete = hasConcreteSource(snapshot.source);
+  const hasAnalystSignal = analystSourceIsConcrete && (totalRatings > 0 || hasAnalystTarget || snapshot.consensus !== "Unavailable");
   const analystStatus =
     snapshot.source === "Alpha Vantage key missing"
-      ? "The backend does not see ALPHAVANTAGE_API_KEY yet. Check Render environment variables, save changes, and redeploy."
-      : !hasConcreteSource(snapshot.source)
-        ? "Alpha Vantage did not return usable analyst sentiment for this ticker. Do not treat the blank distribution as Hold, Buy, or Sell."
+      ? "Render is missing ALPHAVANTAGE_API_KEY. Add the key to the backend service environment and redeploy."
+      : !analystSourceIsConcrete
+        ? "Alpha Vantage returned a source message instead of analyst data. Check the Render key, redeploy status, and free-tier limits."
         : hasAnalystTarget
-          ? "No full buy/hold/sell distribution is available, so the app is using target price and consensus only."
+          ? "Target price loaded; full buy/hold/sell distribution was not returned."
           : "No usable analyst sentiment was returned for this ticker.";
 
   return (
-    <div className="panel analyst-panel">
+    <div className={`panel analyst-panel ${hasAnalystSignal ? "" : "source-unavailable"}`}>
       <div className="panel-heading">
         <div>
           <h3>Analyst Sentiment</h3>
-          <span>{snapshot.source}</span>
+          <span>{hasAnalystSignal ? snapshot.source : "Source check required"}</span>
         </div>
         <Target size={18} aria-hidden="true" />
       </div>
-      <div className="analyst-summary">
-        <div>
-          <span>Consensus</span>
-          <strong>{snapshot.consensus}</strong>
-        </div>
-        <div>
-          <span>Target Price</span>
-          <strong>{snapshot.target_price ? formatMoney(snapshot.target_price) : "n/a"}</strong>
-        </div>
-        <div>
-          <span>Target Return</span>
-          <strong className={targetReturn === null ? "" : signalClass(targetReturn)}>{targetReturn === null ? "n/a" : formatPct(targetReturn)}</strong>
-        </div>
-      </div>
-      {totalRatings > 0 && (
-        <div className="rating-bars">
-          {ratings.map(([label, value]) => {
-            const width = totalRatings ? `${Math.max(((value ?? 0) / totalRatings) * 100, value ? 4 : 0)}%` : "0%";
-            return (
-              <div key={label}>
-                <span>{label}</span>
-                <div><i style={{ width }} /></div>
-                <strong>{value ?? 0}</strong>
-              </div>
-            );
-          })}
+
+      {hasAnalystSignal ? (
+        <>
+          <div className="analyst-summary">
+            <div>
+              <span>Consensus</span>
+              <strong>{snapshot.consensus}</strong>
+            </div>
+            <div>
+              <span>Target Price</span>
+              <strong>{snapshot.target_price ? formatMoney(snapshot.target_price) : "n/a"}</strong>
+            </div>
+            <div>
+              <span>Target Return</span>
+              <strong className={targetReturn === null ? "" : signalClass(targetReturn)}>{targetReturn === null ? "n/a" : formatPct(targetReturn)}</strong>
+            </div>
+          </div>
+          {totalRatings > 0 ? (
+            <div className="rating-bars">
+              {ratings.map(([label, value]) => {
+                const width = totalRatings ? `${Math.max(((value ?? 0) / totalRatings) * 100, value ? 4 : 0)}%` : "0%";
+                return (
+                  <div key={label}>
+                    <span>{label}</span>
+                    <div><i style={{ width }} /></div>
+                    <strong>{value ?? 0}</strong>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="empty-panel-copy">{analystStatus}</p>
+          )}
+        </>
+      ) : (
+        <div className="source-issue-card">
+          <KeyRound size={18} aria-hidden="true" />
+          <div>
+            <strong>Analyst feed unavailable</strong>
+            <p>{analystStatus}</p>
+            <small>{snapshot.source}</small>
+          </div>
         </div>
       )}
-      {!totalRatings && <p className="empty-panel-copy">{analystStatus}</p>}
     </div>
   );
 }

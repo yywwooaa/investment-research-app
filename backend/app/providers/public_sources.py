@@ -59,11 +59,11 @@ class PublicSourceEnricher:
         if not data:
             return AnalystSnapshot(source="Alpha Vantage key configured; empty OVERVIEW response")
         if data.get("Note"):
-            return AnalystSnapshot(source="Alpha Vantage key configured; rate limit or API note returned")
+            return AnalystSnapshot(source=f"Alpha Vantage note: {self._safe_alpha_message(data.get('Note'))}")
         if data.get("Information"):
-            return AnalystSnapshot(source="Alpha Vantage key configured; API information message returned")
+            return AnalystSnapshot(source=f"Alpha Vantage information: {self._safe_alpha_message(data.get('Information'))}")
         if data.get("Error Message"):
-            return AnalystSnapshot(source="Alpha Vantage key configured; invalid OVERVIEW request")
+            return AnalystSnapshot(source=f"Alpha Vantage error: {self._safe_alpha_message(data.get('Error Message'))}")
         strong_buy = self._int(data.get("AnalystRatingStrongBuy"))
         buy = self._int(data.get("AnalystRatingBuy"))
         hold = self._int(data.get("AnalystRatingHold"))
@@ -178,6 +178,11 @@ class PublicSourceEnricher:
                 return response.text
         except Exception:
             return ""
+
+    def _safe_alpha_message(self, value: Any) -> str:
+        message = str(value or "").replace(self.alpha_vantage_key, "[redacted]")
+        message = " ".join(message.split())
+        return message[:220] if message else "No detail returned"
 
     @staticmethod
     def _consensus(strong_buy: int | None, buy: int | None, hold: int | None, sell: int | None, strong_sell: int | None) -> str:
