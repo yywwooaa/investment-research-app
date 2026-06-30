@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     smtp_password: str = Field(default="", alias="VRW_SMTP_PASSWORD")
     smtp_from: str = Field(default="", alias="VRW_SMTP_FROM")
     smtp_tls: bool = Field(default=True, alias="VRW_SMTP_TLS")
+    alpha_vantage_api_key: str = Field(default="", alias="ALPHAVANTAGE_API_KEY")
+    sec_user_agent: str = Field(default="Variant Research Workbench contact@example.com", alias="VRW_SEC_USER_AGENT")
 
 
 @lru_cache

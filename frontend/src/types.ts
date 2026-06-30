@@ -57,6 +57,37 @@ export interface NewsItem {
   impact_reason: string;
 }
 
+export interface PricePoint {
+  date: string;
+  close: number;
+  volume: number | null;
+}
+
+export type EventCategory = "Earnings" | "Filing" | "News" | "Price Move" | "Analyst" | "User";
+
+export interface EventFlag {
+  date: string;
+  category: EventCategory;
+  title: string;
+  description: string;
+  source: string;
+  sentiment: Sentiment;
+  price_change_pct: number | null;
+  url: string | null;
+}
+
+export interface AnalystSnapshot {
+  source: string;
+  target_price: number | null;
+  strong_buy: number | null;
+  buy: number | null;
+  hold: number | null;
+  sell: number | null;
+  strong_sell: number | null;
+  consensus: string;
+  as_of: string;
+}
+
 export interface Recommendation {
   ticker: string;
   rating: Stance;
@@ -134,6 +165,9 @@ export interface CompanyRecord {
   valuation: ScenarioValuation;
   peers: PeerMetric[];
   news: NewsItem[];
+  price_history: PricePoint[];
+  event_flags: EventFlag[];
+  analyst_snapshot: AnalystSnapshot;
   recommendation: Recommendation;
   provenance: DataProvenance;
 }

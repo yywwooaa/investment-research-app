@@ -32,6 +32,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceDot,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -1437,6 +1438,7 @@ function DataQualityPanel({ company }: { company: CompanyRecord }) {
     ["Financials", company.provenance.financials],
     ["Valuation", company.provenance.valuation],
     ["News", company.provenance.news],
+    ["Analyst", company.analyst_snapshot.source],
     ["Thesis", company.provenance.thesis]
   ];
 
@@ -1468,6 +1470,133 @@ function DataQualityPanel({ company }: { company: CompanyRecord }) {
   );
 }
 
+function priceForEvent(company: CompanyRecord, eventDate: string) {
+  const target = new Date(`${eventDate}T00:00:00Z`).getTime();
+  let best: { date: string; close: number; distance: number } | null = null;
+  for (const point of company.price_history) {
+    const pointTime = new Date(`${point.date}T00:00:00Z`).getTime();
+    const distance = Math.abs(pointTime - target);
+    if (distance <= 1000 * 60 * 60 * 24 * 5 && (!best || distance < best.distance)) {
+      best = { date: point.date, close: point.close, distance };
+    }
+  }
+  return best;
+}
+
+function StockEventPanel({ company }: { company: CompanyRecord }) {
+  const chartData = company.price_history.slice(-120);
+  const markers = company.event_flags
+    .map((event) => ({ event, point: priceForEvent(company, event.date) }))
+    .filter((item): item is { event: CompanyRecord["event_flags"][number]; point: { date: string; close: number; distance: number } } => Boolean(item.point))
+    .slice(0, 10);
+  const visibleEvents = company.event_flags.slice(0, 8);
+
+  return (
+    <div className="panel event-chart-panel">
+      <div className="panel-heading">
+        <div>
+          <h3>Stock Chart & Event Flags</h3>
+          <span>{visibleEvents.length ? `${visibleEvents.length} recent flags from price, news, filings, and earnings` : "No event flags loaded"}</span>
+        </div>
+        <LineChartIcon size={18} aria-hidden="true" />
+      </div>
+      <div className="chart-frame">
+        {chartData.length ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 14, right: 14, left: 0, bottom: 6 }}>
+              <CartesianGrid stroke="#e6e1d8" vertical={false} />
+              <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={26} />
+              <YAxis tickLine={false} axisLine={false} width={44} domain={["auto", "auto"]} />
+              <Tooltip />
+              <Line type="monotone" dataKey="close" name="Close" stroke="#256f78" strokeWidth={3} dot={false} />
+              {markers.map(({ event, point }) => (
+                <ReferenceDot
+                  key={`${event.category}-${event.title}-${event.date}`}
+                  x={point.date}
+                  y={point.close}
+                  r={5}
+                  fill={event.sentiment === "Positive" ? "#247146" : event.sentiment === "Negative" ? "#9c3838" : "#b56b38"}
+                  stroke="#fffaf2"
+                  strokeWidth={2}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="empty-panel-copy">Price history is unavailable for this ticker.</p>
+        )}
+      </div>
+      <div className="event-flag-list">
+        {visibleEvents.map((event) => (
+          <a key={`${event.category}-${event.title}-${event.date}`} href={event.url ?? undefined} target="_blank" rel="noreferrer" className="event-flag-row">
+            <span className={`event-badge ${event.category.toLowerCase().replace(" ", "-")}`}>{event.category}</span>
+            <div>
+              <strong>{event.title}</strong>
+              <small>{event.date} / {event.source}</small>
+              <p>{event.description}</p>
+            </div>
+            {event.price_change_pct !== null && <em className={signalClass(event.price_change_pct)}>{formatPct(event.price_change_pct)}</em>}
+          </a>
+        ))}
+        {!visibleEvents.length && <p className="empty-panel-copy">Add Alpha Vantage or refresh the ticker to populate events.</p>}
+      </div>
+    </div>
+  );
+}
+
+function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
+  const snapshot = company.analyst_snapshot;
+  const ratings: Array<[string, number | null]> = [
+    ["Strong Buy", snapshot.strong_buy],
+    ["Buy", snapshot.buy],
+    ["Hold", snapshot.hold],
+    ["Sell", snapshot.sell],
+    ["Strong Sell", snapshot.strong_sell]
+  ];
+  const totalRatings = ratings.reduce((sum, [, value]) => sum + (value ?? 0), 0);
+  const targetReturn =
+    snapshot.target_price && company.market.price ? (snapshot.target_price / company.market.price - 1) * 100 : null;
+
+  return (
+    <div className="panel analyst-panel">
+      <div className="panel-heading">
+        <div>
+          <h3>Analyst Sentiment</h3>
+          <span>{snapshot.source}</span>
+        </div>
+        <Target size={18} aria-hidden="true" />
+      </div>
+      <div className="analyst-summary">
+        <div>
+          <span>Consensus</span>
+          <strong>{snapshot.consensus}</strong>
+        </div>
+        <div>
+          <span>Target Price</span>
+          <strong>{snapshot.target_price ? formatMoney(snapshot.target_price) : "n/a"}</strong>
+        </div>
+        <div>
+          <span>Target Return</span>
+          <strong className={targetReturn === null ? "" : signalClass(targetReturn)}>{targetReturn === null ? "n/a" : formatPct(targetReturn)}</strong>
+        </div>
+      </div>
+      <div className="rating-bars">
+        {ratings.map(([label, value]) => {
+          const width = totalRatings ? `${Math.max(((value ?? 0) / totalRatings) * 100, value ? 4 : 0)}%` : "0%";
+          return (
+            <div key={label}>
+              <span>{label}</span>
+              <div><i style={{ width }} /></div>
+              <strong>{value ?? 0}</strong>
+            </div>
+          );
+        })}
+      </div>
+      {!totalRatings && <p className="empty-panel-copy">Add `ALPHAVANTAGE_API_KEY` in Render to populate aggregated analyst ratings.</p>}
+    </div>
+  );
+}
+
 function TearSheet({ company, selectedScenario }: { company: CompanyRecord; selectedScenario: ScenarioAssumption | null }) {
   const revenueData = company.financials.annual.map((point) => ({
     period: point.period,
@@ -1486,9 +1615,9 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
     `Base scenario shows ${selectedScenario ? formatPct(selectedScenario.implied_return_pct) : "n/a"} implied return.`
   ];
 
-  return (
-    <section className="content-grid two-column">
-      <div className="panel weekly-panel">
+	  return (
+	    <section className="content-grid two-column">
+	      <div className="panel weekly-panel">
         <div className="panel-heading">
           <h3>What Changed This Week</h3>
           <span>{company.recommendation.updated_date}</span>
@@ -1502,6 +1631,10 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
           ))}
         </div>
       </div>
+
+      <StockEventPanel company={company} />
+
+      <AnalystSentimentPanel company={company} />
 
       <div className="panel">
         <div className="panel-heading">

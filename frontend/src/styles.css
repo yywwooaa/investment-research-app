@@ -1408,6 +1408,167 @@ button:disabled {
   height: 232px;
 }
 
+.event-chart-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.empty-panel-copy {
+  margin: 0;
+  color: #6e6659;
+  line-height: 1.45;
+}
+
+.event-flag-list {
+  display: grid;
+  gap: 8px;
+}
+
+.event-flag-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  color: inherit;
+  text-decoration: none;
+  border: 1px solid #e2dbcd;
+  border-radius: 8px;
+  background: #fbf7ee;
+}
+
+.event-flag-row strong,
+.event-flag-row small,
+.event-flag-row p {
+  display: block;
+}
+
+.event-flag-row strong {
+  overflow-wrap: anywhere;
+}
+
+.event-flag-row small {
+  margin-top: 2px;
+  color: #766f64;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.event-flag-row p {
+  margin: 5px 0 0;
+  color: #5d584f;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.event-flag-row em {
+  font-style: normal;
+  font-weight: 850;
+}
+
+.event-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 4px 8px;
+  color: #2f2d2a;
+  border-radius: 999px;
+  background: #ded7c8;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.event-badge.earnings {
+  color: #143f35;
+  background: #b8d7ca;
+}
+
+.event-badge.filing {
+  color: #173653;
+  background: #c7d9ed;
+}
+
+.event-badge.news {
+  color: #5c3418;
+  background: #edd2ad;
+}
+
+.event-badge.price-move {
+  color: #402b54;
+  background: #d8c8e8;
+}
+
+.event-badge.analyst {
+  color: #4a1111;
+  background: #e7b9b9;
+}
+
+.analyst-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.analyst-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.analyst-summary div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e2dbcd;
+  border-radius: 8px;
+  background: #fbf7ee;
+}
+
+.analyst-summary span,
+.rating-bars span {
+  color: #766f64;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.analyst-summary strong {
+  color: #201d18;
+  font-size: 20px;
+}
+
+.rating-bars {
+  display: grid;
+  gap: 9px;
+}
+
+.rating-bars > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) 28px;
+  gap: 9px;
+  align-items: center;
+}
+
+.rating-bars div div {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e6e1d8;
+}
+
+.rating-bars i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #256f78;
+}
+
+.rating-bars strong {
+  text-align: right;
+}
+
 .return-strip {
   display: flex;
   align-items: center;

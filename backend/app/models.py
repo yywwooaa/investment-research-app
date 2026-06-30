@@ -62,6 +62,35 @@ class NewsItem(BaseModel):
     impact_reason: str = "Review for ticker-specific relevance before using in a thesis."
 
 
+class PricePoint(BaseModel):
+    date: date
+    close: float
+    volume: float | None = None
+
+
+class EventFlag(BaseModel):
+    date: date
+    category: Literal["Earnings", "Filing", "News", "Price Move", "Analyst", "User"]
+    title: str
+    description: str
+    source: str
+    sentiment: Sentiment = "Neutral"
+    price_change_pct: float | None = None
+    url: str | None = None
+
+
+class AnalystSnapshot(BaseModel):
+    source: str = "Unavailable"
+    target_price: float | None = None
+    strong_buy: int | None = None
+    buy: int | None = None
+    hold: int | None = None
+    sell: int | None = None
+    strong_sell: int | None = None
+    consensus: str = "Unavailable"
+    as_of: date = Field(default_factory=date.today)
+
+
 class Recommendation(BaseModel):
     ticker: str
     rating: Literal["Buy", "Hold", "Sell", "Under Review"] = "Under Review"
@@ -141,6 +170,9 @@ class CompanyRecord(BaseModel):
     valuation: ScenarioValuation
     peers: list[PeerMetric]
     news: list[NewsItem] = Field(default_factory=list)
+    price_history: list[PricePoint] = Field(default_factory=list)
+    event_flags: list[EventFlag] = Field(default_factory=list)
+    analyst_snapshot: AnalystSnapshot = Field(default_factory=AnalystSnapshot)
     recommendation: Recommendation
     provenance: DataProvenance = Field(default_factory=DataProvenance)
 

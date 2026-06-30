@@ -11,6 +11,8 @@ The repository is designed to be public-GitHub safe. Demo fixtures are synthetic
 - Saved-watchlist dashboard with breadth, top movers, recommendation mix, and a personalized heatmap.
 - Trending tape ranked by available news count, recent movement, and tracked/saved-name traction.
 - Data provenance panel showing which fields are Yahoo/Bloomberg-backed, fixture-backed, scaffolded, or unavailable.
+- Stock chart event flags for major price moves, SEC filings, earnings dates, analyst updates, and relevant news when available.
+- Aggregated analyst sentiment panel with consensus, target price, and buy/hold/sell distribution when Alpha Vantage is configured.
 - Bull/base/bear scenario valuation workspace with editable assumptions and implied return.
 - Thesis editor for stance, horizon, one-liner, variant view, evidence, risks, and watch items.
 - Saved idea board for bookmarking tickers, setting priority, and writing the reason you want to revisit the name.
@@ -26,7 +28,7 @@ The repository is designed to be public-GitHub safe. Demo fixtures are synthetic
 - Frontend: React, TypeScript, Vite, Recharts, Lucide icons
 - Backend: FastAPI, Pydantic, SQLite
 - Data providers: `SnapshotProvider` for public demo fixtures, `BloombergProvider` for local Bloomberg Desktop API refreshes
-- Optional free/public provider: `YahooFinanceProvider` through `yfinance`
+- Optional free/public provider: `YahooFinanceProvider` through `yfinance`, SEC EDGAR, and Alpha Vantage
 - Optional local MCP server: `scripts/yfinance_mcp_server.py` exposes Yahoo/yfinance tools to MCP clients
 
 ## Setup
@@ -73,6 +75,15 @@ Use Yahoo Finance mode:
 VRW_DATA_SOURCE=yahoo
 ```
 
+Optional free/public enrichment:
+
+```bash
+ALPHAVANTAGE_API_KEY=your-alpha-vantage-key
+VRW_SEC_USER_AGENT="Variant Research Workbench your-email@example.com"
+```
+
+SEC EDGAR does not require an API key and is used for recent filing flags. Alpha Vantage is optional and powers aggregated analyst ratings, target price, earnings-calendar flags, and additional news/sentiment when the key is present.
+
 Generate a local weekly research packet:
 
 ```bash
@@ -107,6 +118,8 @@ The app currently separates the research workflow from the data source:
 
 - The starter tape can include synthetic/sanitized fixture values and demo news summaries.
 - Yahoo mode uses `yfinance` for free/public market data and news where available. `yfinance` is unofficial, not affiliated with Yahoo, and should be treated as research/educational/personal-use data rather than institutional-grade data.
+- SEC EDGAR is used for official filing-event flags where available.
+- Alpha Vantage can add aggregated analyst ratings, target prices, earnings-calendar events, and news sentiment when `ALPHAVANTAGE_API_KEY` is configured.
 - Bloomberg mode can refresh financial and market reference fields locally through BLPAPI.
 - Current-news automation still needs a licensed source: Bloomberg News/Terminal entitlements, a market-data API with news, RSS feeds you are allowed to use, or manually approved imports.
 - Data provenance is field-level: if Yahoo/Bloomberg does not supply a core field, the app flags fixture/scaffold fallback instead of presenting it as current market data.

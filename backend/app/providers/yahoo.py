@@ -10,11 +10,13 @@ from backend.app.models import (
     CompanyProfile,
     CompanyRecord,
     DataProvenance,
+    EventFlag,
     FinancialPoint,
     FinancialSeries,
     MarketSnapshot,
     NewsItem,
     PeerMetric,
+    PricePoint,
     Recommendation,
     RefreshResult,
     ScenarioAssumption,
@@ -23,6 +25,7 @@ from backend.app.models import (
     Thesis,
 )
 from backend.app.providers.base import DataProvider
+from backend.app.providers.public_sources import PublicSourceEnricher
 from backend.app.providers.snapshot import SnapshotProvider
 
 
@@ -34,8 +37,9 @@ class YahooFinanceProvider(DataProvider):
     market data.
     """
 
-    def __init__(self, fallback: SnapshotProvider):
+    def __init__(self, fallback: SnapshotProvider, alpha_vantage_key: str = "", sec_user_agent: str = ""):
         self.fallback = fallback
+        self.public_sources = PublicSourceEnricher(alpha_vantage_key=alpha_vantage_key, sec_user_agent=sec_user_agent)
         self._records: dict[str, CompanyRecord] | None = None
 
     def list_companies(self) -> list[CompanyRecord]:
@@ -94,12 +98,17 @@ class YahooFinanceProvider(DataProvider):
         profile = self._build_profile(ticker, info, fast_info, base)
         market = self._build_market(info, fast_info, history, base)
         financials = self._build_financials(yf_ticker, info, base)
-        news = self._build_news(yf_ticker, ticker, profile.name)
+        yahoo_news = self._build_news(yf_ticker, ticker, profile.name)
+        alpha_news = self.public_sources.alpha_vantage_news(ticker)
+        news = self._merge_news(yahoo_news, alpha_news)
         peers = self._build_peers(yf, ticker, profile, info, base)
         valuation = self._build_valuation(ticker, market, info, financials, base)
         thesis = self._build_thesis(ticker, profile, market, valuation, news, base)
         provenance = self._build_provenance(ticker, info, fast_info, history, base, news, market, valuation)
         recommendation = self._build_recommendation(ticker, market, valuation, news, thesis, provenance)
+        price_history = self._build_price_history(history)
+        analyst_snapshot = self.public_sources.alpha_vantage_analyst_snapshot(ticker)
+        event_flags = self._build_event_flags(ticker, history, news, analyst_snapshot, market)
 
         return CompanyRecord(
             profile=profile,
@@ -109,6 +118,9 @@ class YahooFinanceProvider(DataProvider):
             valuation=valuation,
             peers=peers,
             news=news,
+            price_history=price_history,
+            event_flags=event_flags,
+            analyst_snapshot=analyst_snapshot,
             recommendation=recommendation,
             provenance=provenance,
         )
@@ -508,6 +520,120 @@ class YahooFinanceProvider(DataProvider):
                 impact_reason="Treat this as a data-coverage warning, not a company-specific signal.",
             )
         ]
+
+    @staticmethod
+    def _merge_news(primary: list[NewsItem], secondary: list[NewsItem]) -> list[NewsItem]:
+        placeholder = "No ticker-specific Yahoo Finance news returned"
+        combined = [item for item in [*secondary, *primary] if not item.title.startswith(placeholder)]
+        if not combined:
+            return primary
+        seen: set[str] = set()
+        deduped: list[NewsItem] = []
+        for item in sorted(combined, key=lambda news: news.published_at, reverse=True):
+            key = re.sub(r"\W+", "", item.title.lower())[:80]
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+            if len(deduped) >= 12:
+                break
+        return deduped
+
+    @staticmethod
+    def _build_price_history(history: Any) -> list[PricePoint]:
+        if history is None:
+            return []
+        points: list[PricePoint] = []
+        try:
+            recent = history.tail(180)
+            for index, row in recent.iterrows():
+                close = YahooFinanceProvider._num(row.get("Close"), None)
+                if close is None or close <= 0:
+                    continue
+                point_date = index.date() if hasattr(index, "date") else date.fromisoformat(str(index)[:10])
+                points.append(
+                    PricePoint(
+                        date=point_date,
+                        close=round(close, 2),
+                        volume=YahooFinanceProvider._num(row.get("Volume"), None),
+                    )
+                )
+        except Exception:
+            return []
+        return points
+
+    def _build_event_flags(
+        self,
+        ticker: str,
+        history: Any,
+        news: list[NewsItem],
+        analyst_snapshot: Any,
+        market: MarketSnapshot,
+    ) -> list[EventFlag]:
+        events: list[EventFlag] = []
+        events.extend(self._price_move_events(history))
+        events.extend(self.public_sources.sec_filing_events(ticker))
+        events.extend(self.public_sources.alpha_vantage_earnings_events(ticker))
+        if analyst_snapshot.target_price:
+            implied = (analyst_snapshot.target_price / market.price - 1) * 100 if market.price else None
+            events.append(
+                EventFlag(
+                    date=analyst_snapshot.as_of,
+                    category="Analyst",
+                    title=f"{analyst_snapshot.consensus} analyst consensus",
+                    description=(
+                        f"Aggregated analyst target is ${analyst_snapshot.target_price:.2f}"
+                        + (f", implying {implied:.1f}% versus spot." if implied is not None else ".")
+                    ),
+                    source=analyst_snapshot.source,
+                    sentiment="Positive" if implied and implied > 10 else "Negative" if implied and implied < -10 else "Neutral",
+                    price_change_pct=implied,
+                )
+            )
+        for item in news[:5]:
+            if item.title.startswith("No ticker-specific Yahoo Finance news returned"):
+                continue
+            events.append(
+                EventFlag(
+                    date=item.published_at,
+                    category="News",
+                    title=item.title,
+                    description=item.impact_reason,
+                    source=item.source,
+                    sentiment=item.sentiment,
+                    url=item.url,
+                )
+            )
+        return sorted(events, key=lambda event: event.date, reverse=True)[:18]
+
+    @staticmethod
+    def _price_move_events(history: Any) -> list[EventFlag]:
+        if history is None:
+            return []
+        events: list[EventFlag] = []
+        try:
+            recent = history.tail(120).copy()
+            closes = recent["Close"]
+            pct_changes = closes.pct_change() * 100
+            for index, change in pct_changes.dropna().items():
+                if abs(float(change)) < 5:
+                    continue
+                point_date = index.date() if hasattr(index, "date") else date.fromisoformat(str(index)[:10])
+                direction = "rose" if change > 0 else "fell"
+                events.append(
+                    EventFlag(
+                        date=point_date,
+                        category="Price Move",
+                        title=f"Stock {direction} {abs(float(change)):.1f}%",
+                        description="Large one-day move; match against news, filings, earnings, or sector moves before attributing causality.",
+                        source="Yahoo/yfinance price history",
+                        sentiment="Positive" if change > 0 else "Negative",
+                        price_change_pct=round(float(change), 1),
+                    )
+                )
+        except Exception:
+            return []
+        return sorted(events, key=lambda event: abs(event.price_change_pct or 0), reverse=True)[:6]
 
     @staticmethod
     def _clean_news_text(value: Any) -> str:

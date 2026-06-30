@@ -50,7 +50,11 @@ if settings.data_source.lower() == "bloomberg":
         ),
     )
 elif settings.data_source.lower() == "yahoo":
-    provider = YahooFinanceProvider(fallback=snapshot_provider)
+    provider = YahooFinanceProvider(
+        fallback=snapshot_provider,
+        alpha_vantage_key=settings.alpha_vantage_api_key,
+        sec_user_agent=settings.sec_user_agent,
+    )
 else:
     provider = snapshot_provider
 repository = ResearchRepository(settings.sqlite_path)
