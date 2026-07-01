@@ -43,6 +43,7 @@ import type {
   AdminUser,
   AuthResponse,
   AuthUser,
+  AnalystSnapshot,
   CompanyRecord,
   MarkdownExport,
   SavedIdea,
@@ -127,6 +128,24 @@ function formatMultiple(value: number | null | undefined) {
 function hasConcreteSource(source: string | null | undefined) {
   if (!source) return false;
   return !/(fixture|synthetic|scaffold|unavailable|no current|not returned|empty|rate limit|api information|alpha vantage information|alpha vantage note|alpha vantage error|invalid|missing)/i.test(source);
+}
+
+function getAnalystSignal(snapshot: AnalystSnapshot, marketPrice: number) {
+  const ratings = [snapshot.strong_buy, snapshot.buy, snapshot.hold, snapshot.sell, snapshot.strong_sell];
+  const totalRatings = ratings.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  const targetReturn = snapshot.target_price && marketPrice ? (snapshot.target_price / marketPrice - 1) * 100 : null;
+  const hasYahooSummary = snapshot.source.includes("Yahoo analyst summary fallback");
+  const hasConcreteAnalystSource = hasConcreteSource(snapshot.source) || hasYahooSummary;
+  const hasConsensus = snapshot.consensus !== "Unavailable" && snapshot.consensus !== "Yahoo Summary";
+  const hasAnalystSignal = hasConcreteAnalystSource && (totalRatings > 0 || targetReturn !== null || hasConsensus);
+
+  return {
+    hasAnalystSignal,
+    hasConsensus,
+    hasYahooSummary,
+    targetReturn,
+    totalRatings
+  };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -1568,14 +1587,7 @@ function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
     ["Sell", snapshot.sell],
     ["Strong Sell", snapshot.strong_sell]
   ];
-  const totalRatings = ratings.reduce((sum, [, value]) => sum + (value ?? 0), 0);
-  const targetReturn =
-    snapshot.target_price && company.market.price ? (snapshot.target_price / company.market.price - 1) * 100 : null;
-  const hasAnalystTarget = targetReturn !== null;
-  const hasYahooSummary = snapshot.source.includes("Yahoo analyst summary fallback");
-  const hasConcreteAnalystSource = hasConcreteSource(snapshot.source) || hasYahooSummary;
-  const hasConsensus = snapshot.consensus !== "Unavailable" && snapshot.consensus !== "Yahoo Summary";
-  const hasAnalystSignal = hasConcreteAnalystSource && (totalRatings > 0 || hasAnalystTarget || hasConsensus);
+  const { hasAnalystSignal, hasConsensus, hasYahooSummary, targetReturn, totalRatings } = getAnalystSignal(snapshot, company.market.price);
 
   if (!hasAnalystSignal) {
     return null;
@@ -1639,17 +1651,37 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
     Math.abs(company.market.relative_strength_pct) > 500
       ? `Relative strength is extreme at ${formatPct(company.market.relative_strength_pct)}; validate split or corporate-action adjustments before using it as a signal.`
       : `Relative strength is ${formatPct(company.market.relative_strength_pct)}, which ${company.market.relative_strength_pct >= 0 ? "supports" : "pressures"} the current signal.`;
+  const hasRiskReward = Boolean(
+    selectedScenario &&
+      selectedScenario.implied_price > 0 &&
+      Math.abs(selectedScenario.implied_return_pct) >= 0.1
+  );
+  const hasCatalystsOrRisks = company.thesis.catalysts.length > 0 || company.thesis.risks.length > 0;
+  const hasAnalystSignal = getAnalystSignal(company.analyst_snapshot, company.market.price).hasAnalystSignal;
+  const hasFinancialTrajectory = revenueData.some((point) => point.revenue > 0);
+  const hasPeerComps = company.peers.some(
+    (peer) => peer.ev_sales_ntm > 0 || Math.abs(peer.revenue_growth_ntm_pct) > 0 || Boolean(peer.ev_ebitda_ntm)
+  );
+  const thesisOneLiner = company.thesis.one_liner.trim();
+  const thesisVariantView = company.thesis.variant_view.trim();
+  const isPlaceholderVariant =
+    company.thesis.stance === "Under Review" &&
+    /source-backed research review|build the differentiated view after reviewing source-backed/i.test(`${thesisOneLiner} ${thesisVariantView}`);
+  const hasVariantText = Boolean((thesisOneLiner || thesisVariantView) && !isPlaceholderVariant);
+  const showVariantView = hasVariantText || hasRiskReward;
   const weeklySignals = [
     `${company.profile.ticker} moved ${formatPct(company.market.daily_change_pct)} today and ${formatPct(company.market.ytd_change_pct)} YTD.`,
     relativeStrengthSignal,
-    `${rankedNews.length} ticker-specific news item(s) are available for the current research refresh.`,
-    `Base scenario shows ${selectedScenario ? formatPct(selectedScenario.implied_return_pct) : "n/a"} implied return.`
+    `${rankedNews.length} ticker-specific news item(s) are available for the current research refresh.`
   ];
-  const hasCatalystsOrRisks = company.thesis.catalysts.length > 0 || company.thesis.risks.length > 0;
+  if (hasRiskReward && selectedScenario) {
+    weeklySignals.push(`Base scenario shows ${formatPct(selectedScenario.implied_return_pct)} implied return.`);
+  }
+  const useCompactLayout = !hasAnalystSignal;
 
-	  return (
-	    <section className="content-grid two-column">
-	      <div className="panel weekly-panel">
+  return (
+    <section className={`content-grid ${useCompactLayout ? "tear-sheet-compact" : "two-column"}`}>
+      <div className="panel weekly-panel">
         <div className="panel-heading">
           <h3>What Changed This Week</h3>
           <span>{company.recommendation.updated_date}</span>
@@ -1668,40 +1700,44 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
 
       <AnalystSentimentPanel company={company} />
 
-      <div className="panel">
-        <div className="panel-heading">
-          <h3>Financial Trajectory</h3>
-          <LineChartIcon size={18} aria-hidden="true" />
-        </div>
-        <div className="chart-frame">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={revenueData} margin={{ top: 12, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid stroke="#e6e1d8" vertical={false} />
-              <XAxis dataKey="period" tickLine={false} axisLine={false} />
-              <YAxis yAxisId="left" tickLine={false} axisLine={false} width={42} />
-              <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} width={42} />
-              <Tooltip />
-              <Line yAxisId="left" type="monotone" dataKey="revenue" name="Revenue" stroke="#256f78" strokeWidth={3} dot={false} />
-              <Line yAxisId="right" type="monotone" dataKey="margin" name="EBITDA margin" stroke="#b56b38" strokeWidth={3} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div className="panel">
-        <div className="panel-heading">
-          <h3>Variant View</h3>
-          <span className={`stance-pill ${company.thesis.stance.toLowerCase().replace(" ", "-")}`}>{company.thesis.stance}</span>
-        </div>
-        <p className="lead-copy">{company.thesis.one_liner}</p>
-        <p>{company.thesis.variant_view}</p>
-        {selectedScenario && (
-          <div className="return-strip">
-            <span>Base risk/reward</span>
-            <strong>{formatPct(selectedScenario.implied_return_pct)}</strong>
+      {hasFinancialTrajectory && (
+        <div className="panel">
+          <div className="panel-heading">
+            <h3>Financial Trajectory</h3>
+            <LineChartIcon size={18} aria-hidden="true" />
           </div>
-        )}
-      </div>
+          <div className="chart-frame">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={revenueData} margin={{ top: 12, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke="#e6e1d8" vertical={false} />
+                <XAxis dataKey="period" tickLine={false} axisLine={false} />
+                <YAxis yAxisId="left" tickLine={false} axisLine={false} width={42} />
+                <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} width={42} />
+                <Tooltip />
+                <Line yAxisId="left" type="monotone" dataKey="revenue" name="Revenue" stroke="#256f78" strokeWidth={3} dot={false} />
+                <Line yAxisId="right" type="monotone" dataKey="margin" name="EBITDA margin" stroke="#b56b38" strokeWidth={3} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {showVariantView && (
+        <div className="panel variant-view-panel">
+          <div className="panel-heading">
+            <h3>Variant View</h3>
+            <span className={`stance-pill ${company.thesis.stance.toLowerCase().replace(" ", "-")}`}>{company.thesis.stance}</span>
+          </div>
+          {hasVariantText && <p className="lead-copy">{thesisOneLiner}</p>}
+          {hasVariantText && thesisVariantView && <p>{thesisVariantView}</p>}
+          {hasRiskReward && selectedScenario && (
+            <div className="return-strip">
+              <span>Base risk/reward</span>
+              <strong>{formatPct(selectedScenario.implied_return_pct)}</strong>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="panel">
         <div className="panel-heading">
@@ -1723,24 +1759,26 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
         </div>
       </div>
 
-      <div className="panel">
-        <div className="panel-heading">
-          <h3>Peer Comps</h3>
-          <BarChart3 size={18} aria-hidden="true" />
+      {hasPeerComps && (
+        <div className="panel">
+          <div className="panel-heading">
+            <h3>Peer Comps</h3>
+            <BarChart3 size={18} aria-hidden="true" />
+          </div>
+          <div className="chart-frame short">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={company.peers}>
+                <CartesianGrid stroke="#e6e1d8" vertical={false} />
+                <XAxis dataKey="ticker" tickLine={false} axisLine={false} />
+                <YAxis tickLine={false} axisLine={false} width={38} />
+                <Tooltip />
+                <Bar dataKey="ev_sales_ntm" name="EV/Sales" fill="#256f78" radius={[5, 5, 0, 0]} />
+                <Bar dataKey="revenue_growth_ntm_pct" name="Growth %" fill="#b56b38" radius={[5, 5, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
-        <div className="chart-frame short">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={company.peers}>
-              <CartesianGrid stroke="#e6e1d8" vertical={false} />
-              <XAxis dataKey="ticker" tickLine={false} axisLine={false} />
-              <YAxis tickLine={false} axisLine={false} width={38} />
-              <Tooltip />
-              <Bar dataKey="ev_sales_ntm" name="EV/Sales" fill="#256f78" radius={[5, 5, 0, 0]} />
-              <Bar dataKey="revenue_growth_ntm_pct" name="Growth %" fill="#b56b38" radius={[5, 5, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+      )}
 
       {hasCatalystsOrRisks && (
         <div className="panel catalyst-risk-panel">

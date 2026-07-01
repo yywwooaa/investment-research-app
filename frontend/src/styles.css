@@ -1315,6 +1315,15 @@ button:disabled {
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
 }
 
+.tear-sheet-compact {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tear-sheet-compact .event-chart-panel,
+.tear-sheet-compact .weekly-panel {
+  grid-column: 1 / -1;
+}
+
 .valuation-layout,
 .thesis-layout,
 .export-layout {
