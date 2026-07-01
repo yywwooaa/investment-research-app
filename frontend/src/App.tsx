@@ -1572,29 +1572,19 @@ function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
   const targetReturn =
     snapshot.target_price && company.market.price ? (snapshot.target_price / company.market.price - 1) * 100 : null;
   const hasAnalystTarget = targetReturn !== null;
-  const hasYahooFallback = snapshot.source.includes("Yahoo analyst summary fallback");
-  const analystSourceIsConcrete = hasConcreteSource(snapshot.source);
-  const hasAnalystSignal = totalRatings > 0 || hasAnalystTarget || (hasYahooFallback && snapshot.consensus !== "Unavailable");
-  const alphaSourceIssue = !analystSourceIsConcrete && snapshot.source !== "Alpha Vantage key missing";
-  const analystDisplaySource = hasYahooFallback
-    ? "Yahoo analyst summary fallback"
-    : hasAnalystSignal
-      ? snapshot.source
-      : "Source check required";
-  const analystStatus =
-    snapshot.source === "Alpha Vantage key missing"
-      ? "Render is missing ALPHAVANTAGE_API_KEY or ALPHAVANTAGE_API_KEYS. Add the key to the backend service environment and redeploy."
-      : hasYahooFallback
-        ? "Yahoo target/consensus is loaded. Alpha Vantage is capped or unavailable, so full rating distribution is hidden."
-        : !analystSourceIsConcrete
-          ? "Alpha Vantage returned a source message instead of analyst data. Check the Render key, redeploy status, and free-tier limits."
-          : hasAnalystTarget
-            ? "Target price loaded; full buy/hold/sell distribution was not returned."
-            : "No usable analyst sentiment was returned for this ticker.";
-  const alphaDetail = hasYahooFallback && alphaSourceIssue ? snapshot.source.split("; Yahoo analyst summary fallback")[0] : "";
+  const hasYahooSummary = snapshot.source.includes("Yahoo analyst summary fallback");
+  const hasConcreteAnalystSource = hasConcreteSource(snapshot.source) || hasYahooSummary;
+  const hasConsensus = snapshot.consensus !== "Unavailable" && snapshot.consensus !== "Yahoo Summary";
+  const hasAnalystSignal = hasConcreteAnalystSource && (totalRatings > 0 || hasAnalystTarget || hasConsensus);
+
+  if (!hasAnalystSignal) {
+    return null;
+  }
+
+  const analystDisplaySource = hasYahooSummary ? "Yahoo analyst summary" : snapshot.source;
 
   return (
-    <div className={`panel analyst-panel ${hasAnalystSignal ? "" : "source-unavailable"}`}>
+    <div className="panel analyst-panel">
       <div className="panel-heading">
         <div>
           <h3>Analyst Sentiment</h3>
@@ -1603,51 +1593,36 @@ function AnalystSentimentPanel({ company }: { company: CompanyRecord }) {
         <Target size={18} aria-hidden="true" />
       </div>
 
-      {hasAnalystSignal ? (
-        <>
-          <div className="analyst-summary">
-            <div>
-              <span>Consensus</span>
-              <strong>{snapshot.consensus}</strong>
-            </div>
-            <div>
-              <span>Target Price</span>
-              <strong>{snapshot.target_price ? formatMoney(snapshot.target_price) : "n/a"}</strong>
-            </div>
-            <div>
-              <span>Target Return</span>
-              <strong className={targetReturn === null ? "" : signalClass(targetReturn)}>{targetReturn === null ? "n/a" : formatPct(targetReturn)}</strong>
-            </div>
-          </div>
-          {totalRatings > 0 ? (
-            <div className="rating-bars">
-              {ratings.map(([label, value]) => {
-                const width = totalRatings ? `${Math.max(((value ?? 0) / totalRatings) * 100, value ? 4 : 0)}%` : "0%";
-                return (
-                  <div key={label}>
-                    <span>{label}</span>
-                    <div><i style={{ width }} /></div>
-                    <strong>{value ?? 0}</strong>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="analyst-note">
-              <p>{analystStatus}</p>
-              {alphaDetail && <small>{alphaDetail}</small>}
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="source-issue-card">
-          <KeyRound size={18} aria-hidden="true" />
-          <div>
-            <strong>Analyst feed unavailable</strong>
-            <p>{analystStatus}</p>
-            <small>{snapshot.source}</small>
-          </div>
+      <div className="analyst-summary">
+        <div>
+          <span>Consensus</span>
+          <strong>{hasConsensus ? snapshot.consensus : "n/a"}</strong>
         </div>
+        <div>
+          <span>Target Price</span>
+          <strong>{snapshot.target_price ? formatMoney(snapshot.target_price) : "n/a"}</strong>
+        </div>
+        <div>
+          <span>Target Return</span>
+          <strong className={targetReturn === null ? "" : signalClass(targetReturn)}>{targetReturn === null ? "n/a" : formatPct(targetReturn)}</strong>
+        </div>
+      </div>
+
+      {totalRatings > 0 ? (
+        <div className="rating-bars">
+          {ratings.map(([label, value]) => {
+            const width = totalRatings ? `${Math.max(((value ?? 0) / totalRatings) * 100, value ? 4 : 0)}%` : "0%";
+            return (
+              <div key={label}>
+                <span>{label}</span>
+                <div><i style={{ width }} /></div>
+                <strong>{value ?? 0}</strong>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="analyst-footnote">Rating distribution was not returned by the source.</p>
       )}
     </div>
   );
@@ -1670,6 +1645,7 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
     `${rankedNews.length} ticker-specific news item(s) are available for the current research refresh.`,
     `Base scenario shows ${selectedScenario ? formatPct(selectedScenario.implied_return_pct) : "n/a"} implied return.`
   ];
+  const hasCatalystsOrRisks = company.thesis.catalysts.length > 0 || company.thesis.risks.length > 0;
 
 	  return (
 	    <section className="content-grid two-column">
@@ -1766,35 +1742,28 @@ function TearSheet({ company, selectedScenario }: { company: CompanyRecord; sele
         </div>
       </div>
 
-      <div className="panel catalyst-risk-panel">
-        <div className="panel-heading">
-          <h3>Catalysts & Risks</h3>
-          <span>{company.thesis.catalysts.length} catalysts / {company.thesis.risks.length} risks</span>
-        </div>
-        {company.thesis.catalysts.length || company.thesis.risks.length ? (
-          <>
-            <div className="catalyst-list">
-              {company.thesis.catalysts.map((catalyst) => (
-                <div key={`${catalyst.title}-${catalyst.timing}`} className="catalyst-row">
-                  <strong>{catalyst.title}</strong>
-                  <span>{catalyst.timing}</span>
-                  <small>{catalyst.impact} / {catalyst.status}</small>
-                </div>
-              ))}
-            </div>
-            <ul className="risk-list">
-              {company.thesis.risks.map((risk) => (
-                <li key={risk}>{risk}</li>
-              ))}
-            </ul>
-          </>
-        ) : (
-          <div className="empty-research-card">
-            <strong>No source-backed catalysts or risks yet</strong>
-            <p>Add only catalysts, risks, or watch items you can tie to filings, earnings dates, management commentary, or real news.</p>
+      {hasCatalystsOrRisks && (
+        <div className="panel catalyst-risk-panel">
+          <div className="panel-heading">
+            <h3>Catalysts & Risks</h3>
+            <span>{company.thesis.catalysts.length} catalysts / {company.thesis.risks.length} risks</span>
           </div>
-        )}
-      </div>
+          <div className="catalyst-list">
+            {company.thesis.catalysts.map((catalyst) => (
+              <div key={`${catalyst.title}-${catalyst.timing}`} className="catalyst-row">
+                <strong>{catalyst.title}</strong>
+                <span>{catalyst.timing}</span>
+                <small>{catalyst.impact} / {catalyst.status}</small>
+              </div>
+            ))}
+          </div>
+          <ul className="risk-list">
+            {company.thesis.risks.map((risk) => (
+              <li key={risk}>{risk}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </section>
   );
 }

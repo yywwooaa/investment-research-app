@@ -1569,6 +1569,13 @@ button:disabled {
   text-align: right;
 }
 
+.analyst-footnote {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .return-strip {
   display: flex;
   align-items: center;
@@ -2543,45 +2550,6 @@ body {
   background: #f8fafc;
 }
 
-.analyst-panel.source-unavailable {
-  align-content: start;
-  gap: 10px;
-}
-
-.source-issue-card {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  padding: 12px;
-  border: 1px solid #f0d7b5;
-  border-radius: 8px;
-  background: #fff7ed;
-}
-
-.source-issue-card strong,
-.source-issue-card p,
-.source-issue-card small {
-  display: block;
-}
-
-.source-issue-card strong {
-  color: #9a3412;
-}
-
-.source-issue-card p {
-  margin: 4px 0 0;
-  color: #7c2d12;
-  line-height: 1.45;
-}
-
-.source-issue-card small {
-  margin-top: 8px;
-  color: #92400e;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
 .analyst-summary div {
   min-height: 78px;
 }
@@ -2615,35 +2583,6 @@ body {
   .tab-strip {
     position: static;
   }
-}
-
-/* Clearer analyst fallback and empty research states */
-.analyst-note,
-.empty-research-card {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border: 1px solid #d7e0e7;
-  border-radius: 8px;
-  background: #f8fafc;
-}
-
-.analyst-note p,
-.empty-research-card p {
-  margin: 0;
-  color: #475569;
-  line-height: 1.45;
-}
-
-.analyst-note small {
-  color: #92400e;
-  font-size: 12px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.empty-research-card strong {
-  color: #111827;
 }
 
 .catalyst-risk-panel {
