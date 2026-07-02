@@ -129,7 +129,7 @@ The app currently separates the research workflow from the data source:
 - Bloomberg mode can refresh financial and market reference fields locally through BLPAPI.
 - Current-news automation still needs a licensed source: Bloomberg News/Terminal entitlements, a market-data API with news, RSS feeds you are allowed to use, or manually approved imports.
 - Data provenance is field-level: if Yahoo/Bloomberg does not supply a core field, the app flags fixture/scaffold fallback instead of presenting it as current market data.
-- The recommendation card is a research signal for interview/demo workflows, not investment advice. It moves to `Under Review` when core source gaps or data-quality warnings are detected.
+- The recommendation card is a research signal for interview/demo workflows, not investment advice. In Yahoo mode it can generate derived Buy/Hold/Sell signals for off-universe tickers when live quote, analyst, valuation, or fundamental signals are usable; partial source coverage lowers confidence and is shown in source status. It moves to `Under Review` only when critical source gaps or data-quality warnings make the signal unreliable.
 
 ## API
 

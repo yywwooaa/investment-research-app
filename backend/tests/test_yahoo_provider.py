@@ -3,7 +3,7 @@ from datetime import date
 
 import pandas as pd
 
-from backend.app.models import AnalystSnapshot, NewsItem
+from backend.app.models import AnalystSnapshot, DataProvenance, NewsItem
 from backend.app.providers.snapshot import SnapshotProvider
 from backend.app.providers.yahoo import YahooFinanceProvider
 from backend.app.settings import ROOT_DIR
@@ -65,6 +65,59 @@ def test_yahoo_recommendation_goes_under_review_with_unavailable_live_fields():
     assert recommendation.rating == "Under Review"
     assert recommendation.confidence == "Low"
     assert "core fields unavailable" in recommendation.source_status
+
+
+def test_yahoo_recommendation_rates_target_backed_ticker_with_partial_coverage():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+    base = fallback.get_company("NVDA")
+    market = base.market.model_copy(update={"price": 100, "relative_strength_pct": 4, "ytd_change_pct": 8})
+    valuation = provider._target_price_valuation("CRM", 0, 125, market.price)
+    provenance = DataProvenance(
+        quote="Yahoo Finance quote field",
+        market_cap="Unavailable",
+        financials="Unavailable",
+        valuation="Yahoo analyst target mean; not a DCF",
+        news="No current Yahoo ticker news returned",
+    )
+
+    recommendation = provider._build_recommendation("CRM", market, valuation, [], base.thesis, provenance)
+
+    assert recommendation.rating == "Buy"
+    assert recommendation.confidence == "Medium"
+    assert "partial source coverage" in recommendation.source_status
+    assert "Under Review" not in recommendation.rationale
+
+
+def test_yahoo_recommendation_uses_consensus_and_live_fundamentals_without_target():
+    fallback = SnapshotProvider(ROOT_DIR / "data" / "fixtures" / "universe.json")
+    provider = YahooFinanceProvider(fallback)
+    base = fallback.get_company("NVDA")
+    market = base.market.model_copy(
+        update={
+            "price": 100,
+            "relative_strength_pct": 6,
+            "ytd_change_pct": 9,
+            "ev_sales_ntm": 4,
+            "pe_ntm": 18,
+            "fcf_yield_pct": 4,
+        }
+    )
+    valuation = provider._empty_valuation("CRM", 10)
+    provenance = DataProvenance(
+        quote="Yahoo Finance quote field",
+        market_cap="Yahoo Finance marketCap",
+        financials="Yahoo Finance TTM fundamentals",
+        valuation="Unavailable until user enters DCF assumptions",
+        news="No current Yahoo ticker news returned",
+    )
+    analyst = AnalystSnapshot(source="Yahoo analyst summary fallback", consensus="Buy")
+
+    recommendation = provider._build_recommendation("CRM", market, valuation, [], base.thesis, provenance, analyst)
+
+    assert recommendation.rating == "Buy"
+    assert "analyst consensus proxy signal" in recommendation.rationale
+    assert "partial source coverage" in recommendation.source_status
 
 
 def test_yahoo_news_text_strips_html_markup():

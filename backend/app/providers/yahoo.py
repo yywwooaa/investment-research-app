@@ -928,6 +928,67 @@ class YahooFinanceProvider(DataProvider):
             drivers.append(f"{item.title}: {self._shorten_news_text(summary)}")
         return f"Recent news flow looks {tone}: {' | '.join(drivers)}"
 
+    @staticmethod
+    def _is_source_gap(source: str | None) -> bool:
+        if not source:
+            return True
+        return any(marker in source.lower() for marker in ["fixture", "unavailable", "scaffold"])
+
+    @staticmethod
+    def _analyst_consensus_return(consensus: str) -> float | None:
+        normalized = consensus.lower().strip()
+        if normalized in {"strong buy"}:
+            return 18
+        if normalized in {"buy", "outperform", "overweight"}:
+            return 12
+        if normalized in {"hold", "neutral", "market perform", "equal weight"}:
+            return 0
+        if normalized in {"underperform", "underweight"}:
+            return -8
+        if normalized in {"sell", "strong sell"}:
+            return -14
+        return None
+
+    @staticmethod
+    def _news_signal(news: list[NewsItem]) -> float:
+        real_news = [
+            item
+            for item in news
+            if not item.title.startswith("No ticker-specific Yahoo Finance news returned")
+        ]
+        positive_count = sum(1 for item in real_news if item.sentiment == "Positive")
+        negative_count = sum(1 for item in real_news if item.sentiment == "Negative")
+        return max(-6, min(6, (positive_count - negative_count) * 2))
+
+    @staticmethod
+    def _market_quality_signal(market: MarketSnapshot) -> float:
+        signal = 0.0
+        if market.fcf_yield_pct is not None:
+            signal += max(-8, min(10, market.fcf_yield_pct * 1.4))
+        if market.pe_ntm is not None:
+            if market.pe_ntm <= 0:
+                signal -= 8
+            elif market.pe_ntm <= 18:
+                signal += 7
+            elif market.pe_ntm <= 30:
+                signal += 4
+            elif market.pe_ntm <= 45:
+                signal += 1
+            elif market.pe_ntm <= 70:
+                signal -= 4
+            else:
+                signal -= 8
+        if market.ev_sales_ntm:
+            if market.ev_sales_ntm <= 2:
+                signal += 4
+            elif market.ev_sales_ntm <= 8:
+                signal += 2
+            elif market.ev_sales_ntm >= 30:
+                signal -= 6
+            elif market.ev_sales_ntm >= 18:
+                signal -= 3
+        return max(-18, min(18, signal))
+
     def _build_valuation(
         self,
         ticker: str,
@@ -1143,24 +1204,51 @@ class YahooFinanceProvider(DataProvider):
             )
             hold_ratio = ((analyst_snapshot.hold or 0) / rating_total) if rating_total else 0.0
         analyst_consensus = analyst_snapshot.consensus if analyst_snapshot and analyst_snapshot.consensus != "Unavailable" else ""
-        analyst_is_usable = analyst_return is not None or has_rating_distribution or bool(analyst_consensus)
+        consensus_return = self._analyst_consensus_return(analyst_consensus)
+        analyst_is_usable = analyst_return is not None or has_rating_distribution or consensus_return is not None
         data_quality_warning = abs(market.relative_strength_pct) > 500 or abs(market.ytd_change_pct) > 500
-        fallback_gap = False
+        missing_quote = False
+        missing_market_cap = False
+        missing_financials = False
+        missing_valuation = False
         if provenance is not None:
-            fallback_gap = any(
-                marker in source.lower()
-                for source in [provenance.quote, provenance.market_cap, provenance.financials, provenance.valuation]
-                for marker in ["fixture", "unavailable", "scaffold"]
-            )
+            missing_quote = self._is_source_gap(provenance.quote)
+            missing_market_cap = self._is_source_gap(provenance.market_cap)
+            missing_financials = self._is_source_gap(provenance.financials)
+            missing_valuation = self._is_source_gap(provenance.valuation)
+        model_valuation_usable = valuation.base.implied_price > 0 and not missing_valuation
         bounded_relative_strength = min(100, max(-100, market.relative_strength_pct))
-        blended_return = implied_return
-        if analyst_return is not None:
+        market_signal = self._market_quality_signal(market)
+        news_signal = self._news_signal(news)
+        blended_return = implied_return if model_valuation_usable else 0.0
+        if analyst_return is not None and model_valuation_usable:
             blended_return = implied_return * 0.65 + analyst_return * 0.35
-        score = min(100, max(0, 50 + blended_return * 1.1 + bounded_relative_strength * 0.05))
+        elif analyst_return is not None:
+            blended_return = analyst_return
+        elif not model_valuation_usable and consensus_return is not None:
+            blended_return = consensus_return
+        score = min(100, max(0, 50 + blended_return * 1.1 + bounded_relative_strength * 0.05 + market_signal + news_signal))
         consensus_key = analyst_consensus.lower()
+        has_return_signal = model_valuation_usable or analyst_return is not None or consensus_return is not None
+        has_live_market_fundamentals = provenance is None or not missing_financials
+        has_market_signal = (
+            market.price > 0
+            and has_live_market_fundamentals
+            and (market.pe_ntm is not None or market.fcf_yield_pct is not None or bool(market.ev_sales_ntm))
+        )
+        critical_source_gap = missing_quote or (not has_return_signal and not has_market_signal and (missing_market_cap or missing_financials))
+        partial_source_gap = missing_market_cap or missing_financials or missing_valuation
         if blended_return >= 15 and consensus_key not in {"sell", "strong sell", "underperform"}:
             rating = "Buy"
         elif blended_return <= -10 or consensus_key in {"sell", "strong sell"}:
+            rating = "Sell"
+        elif not has_return_signal and score >= 64 and consensus_key not in {"sell", "strong sell", "underperform"}:
+            rating = "Buy"
+        elif not has_return_signal and score <= 42:
+            rating = "Sell"
+        elif consensus_key in {"buy", "strong buy", "outperform", "overweight"} and score >= 58:
+            rating = "Buy"
+        elif consensus_key in {"underperform", "underweight"} and score <= 48:
             rating = "Sell"
         else:
             rating = "Hold"
@@ -1169,15 +1257,23 @@ class YahooFinanceProvider(DataProvider):
         if has_rating_distribution and hold_ratio >= 0.6 and rating == "Buy":
             rating = "Hold"
         confidence = "Medium" if abs(blended_return) >= 10 and market.price > 0 else "Low"
+        if not partial_source_gap and abs(blended_return) >= 20 and not data_quality_warning:
+            confidence = "High"
+        if partial_source_gap and confidence == "High":
+            confidence = "Medium"
         if data_quality_warning:
             confidence = "Low"
-        if fallback_gap or data_quality_warning:
+        if critical_source_gap or data_quality_warning:
             rating = "Under Review"
             confidence = "Low"
-            score = min(score, 55)
+            score = min(score, 49 if data_quality_warning else 55)
         positives = thesis.evidence[:3] or []
         if analyst_return is not None and analyst_return > 0:
             positives = [f"Analyst target implies {analyst_return:.1f}% upside.", *positives]
+        elif consensus_return is not None and consensus_return > 0 and analyst_return is None:
+            positives = [f"Analyst consensus is {analyst_consensus}.", *positives]
+        if market.fcf_yield_pct is not None and market.fcf_yield_pct > 3:
+            positives = [f"Free cash flow yield is {market.fcf_yield_pct:.1f}%.", *positives]
         negatives = thesis.risks[:3] or ["Free data source; validate against filings and company materials before publishing."]
         if analyst_consensus.lower() in {"hold", "neutral"}:
             negatives = [f"Analyst consensus is {analyst_consensus}, which tempers the model signal.", *negatives]
@@ -1185,9 +1281,16 @@ class YahooFinanceProvider(DataProvider):
             negatives = [f"Most available analyst ratings are Hold ({analyst_snapshot.hold or 0} of {rating_total}).", *negatives]
         if analyst_return is not None and analyst_return < 0:
             negatives = [f"Analyst target implies {abs(analyst_return):.1f}% downside.", *negatives]
-        if fallback_gap:
+        if partial_source_gap:
+            missing_labels = []
+            if missing_market_cap:
+                missing_labels.append("market cap")
+            if missing_financials:
+                missing_labels.append("financials")
+            if missing_valuation:
+                missing_labels.append("valuation target")
             negatives = [
-                "Some core fields are unavailable; validate live market cap, financials, and valuation before assigning a rating.",
+                f"Partial Yahoo coverage: validate {', '.join(missing_labels)} before publishing.",
                 *negatives,
             ]
         if data_quality_warning:
@@ -1195,9 +1298,11 @@ class YahooFinanceProvider(DataProvider):
                 "Extreme Yahoo historical move detected; validate splits, corporate actions, and quote source before using momentum.",
                 *negatives,
             ]
-        source_status = "Yahoo/yfinance where available; unavailable fields keep the rating Under Review"
-        if fallback_gap:
-            source_status += "; data-quality warning: core fields unavailable"
+        source_status = "Yahoo/yfinance derived signal; validate before publishing"
+        if partial_source_gap:
+            source_status += "; partial source coverage"
+        if critical_source_gap:
+            source_status += "; core fields unavailable"
         if data_quality_warning:
             source_status += "; data-quality warning: extreme historical move requires validation"
         news_summary = self._summarize_news_flow(news)
@@ -1225,14 +1330,20 @@ class YahooFinanceProvider(DataProvider):
                 f"relative strength of {market.relative_strength_pct:.1f}%.{analyst_phrase} {news_summary}"
             )
         else:
-            return_phrase = (
-                f"blended model/analyst implied return of {blended_return:.1f}% (model {implied_return:.1f}%)"
-                if analyst_return is not None
-                else f"model implied return of {implied_return:.1f}%"
-            )
+            if analyst_return is not None and model_valuation_usable:
+                return_phrase = f"blended model/analyst implied return of {blended_return:.1f}% (model {implied_return:.1f}%)"
+            elif analyst_return is not None:
+                return_phrase = f"analyst target implied return of {blended_return:.1f}%"
+            elif consensus_return is not None and not model_valuation_usable:
+                return_phrase = f"analyst consensus proxy signal of {blended_return:.1f}%"
+            elif model_valuation_usable:
+                return_phrase = f"model implied return of {implied_return:.1f}%"
+            else:
+                return_phrase = f"derived market-quality signal of {score:.1f}/100"
+            coverage_phrase = " Partial source coverage lowers confidence." if partial_source_gap else ""
             rationale = (
                 f"{rating} based on Yahoo Finance market data, {return_phrase}, relative strength of {market.relative_strength_pct:.1f}%, "
-                f"and the latest news context.{analyst_phrase} {news_summary}"
+                f"and the latest news context.{analyst_phrase}{coverage_phrase} {news_summary}"
             )
         return Recommendation(
             ticker=ticker,
